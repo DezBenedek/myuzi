@@ -1,10 +1,13 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' show Helper;
 import 'package:livekit_client/livekit_client.dart';
 
 import '../providers/providers.dart';
-import '../widgets/widgets.dart';
 
 class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({
@@ -98,6 +101,13 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   Future<void> _hangUp() async {
     try {
+      if (_screenShare && !kIsWeb && Platform.isAndroid) {
+        try {
+          if (FlutterBackground.isBackgroundExecutionEnabled) {
+            await FlutterBackground.disableBackgroundExecution();
+          }
+        } catch (_) {}
+      }
       await ref.read(apiProvider).endCall(widget.callId);
     } catch (_) {}
     await _room?.disconnect();
@@ -134,11 +144,52 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     }
   }
 
+  Future<bool> _enableAndroidScreenShareService() async {
+    try {
+      var hasPermissions = await FlutterBackground.hasPermissions;
+      const androidConfig = FlutterBackgroundAndroidConfig(
+        notificationTitle: 'MyÜzi kijelzőmegosztás',
+        notificationText: 'A hívás megosztja a kijelződet.',
+        notificationImportance: AndroidNotificationImportance.normal,
+        notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+      );
+      hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
+      if (hasPermissions && !FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.enableBackgroundExecution();
+      }
+      return hasPermissions;
+    } catch (e) {
+      debugPrint('android screen share service: $e');
+      return false;
+    }
+  }
+
   Future<void> _toggleScreen() async {
     if (kIsWeb) return;
     final next = !_screenShare;
     try {
-      await _local?.setScreenShareEnabled(next);
+      if (next && !kIsWeb && Platform.isAndroid) {
+        final granted = await Helper.requestCapturePermission();
+        if (!granted) return;
+        final ok = await _enableAndroidScreenShareService();
+        if (!ok) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Kijelzőmegosztáshoz engedély kell')),
+            );
+          }
+          return;
+        }
+      }
+
+      await _local?.setScreenShareEnabled(next, captureScreenAudio: next);
+      if (!next && !kIsWeb && Platform.isAndroid) {
+        try {
+          if (FlutterBackground.isBackgroundExecutionEnabled) {
+            await FlutterBackground.disableBackgroundExecution();
+          }
+        } catch (_) {}
+      }
       setState(() => _screenShare = next);
     } catch (e) {
       debugPrint('screen share: $e');
@@ -282,18 +333,6 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                     onTap: _hangUp,
                   ),
                 ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: SizedBox(
-                width: 220,
-                child: BigButton(
-                  label: 'Hívás bontása',
-                  icon: Icons.call_end,
-                  danger: true,
-                  onPressed: _hangUp,
-                ),
               ),
             ),
           ],

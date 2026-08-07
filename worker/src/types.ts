@@ -4,10 +4,10 @@
  * LIVEKIT_API_SECRET
  * STRIPE_SECRET_KEY
  * STRIPE_WEBHOOK_SECRET
- * FCM_SERVER_KEY (opcionális)
+ * FCM_SERVER_KEY (opcionális — push értesítésekhez)
  *
  * Email: Cloudflare Email Service `send_email` binding (`EMAIL`)
- * — onboardeld a dezso.run domaint az Email Sendingben.
+ * — onboardeld a uvmr.app domaint az Email Sendingben.
  */
 
 type EmailAddress = {
@@ -73,6 +73,13 @@ type FamilyRow = {
   stripe_subscription_id: string | null;
   stripe_status: string | null;
   max_members: number;
+  billing_type?: string | null;
+  billing_name?: string | null;
+  billing_tax_id?: string | null;
+  billing_address_line1?: string | null;
+  billing_city?: string | null;
+  billing_postal_code?: string | null;
+  billing_country?: string | null;
   created_at: string;
   updated_at: string;
 };

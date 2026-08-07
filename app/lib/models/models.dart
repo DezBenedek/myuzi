@@ -45,12 +45,37 @@ class Family {
   final String? role;
   final String? stripeStatus;
 
+  bool get isPaid => plan == 'family' || plan == 'family_plus';
+
+  String get planLabel {
+    if (plan == 'family_plus') return 'Család+';
+    if (plan == 'family') return 'Család';
+    return 'Ingyenes';
+  }
+
+  String get planSummary {
+    if (plan == 'family_plus') {
+      return 'Család+ · max $maxMembers fő · 20 perc hang · hívás · csoport';
+    }
+    if (plan == 'family') {
+      return 'Család · max $maxMembers fő · 10 perc hang · hívás · csoport';
+    }
+    return 'Ingyenes · max $maxMembers fő · 2 perc hang · nincs hívás';
+  }
+
+  /// Ingyenes: 2 · Család: 10 · Család+: 20 perc
+  int get voiceMaxMs {
+    if (plan == 'family_plus') return 20 * 60 * 1000;
+    if (plan == 'family') return 10 * 60 * 1000;
+    return 2 * 60 * 1000;
+  }
+
   factory Family.fromJson(Map<String, dynamic> j) => Family(
         id: j['id'] as String,
         name: j['name'] as String,
         ownerId: j['ownerId'] as String,
         plan: j['plan'] as String? ?? 'none',
-        maxMembers: j['maxMembers'] as int? ?? 6,
+        maxMembers: j['maxMembers'] as int? ?? 3,
         role: j['role'] as String?,
         stripeStatus: j['stripeStatus'] as String?,
       );
@@ -84,7 +109,9 @@ class ConversationSummary {
     required this.name,
     required this.memberCount,
     this.lastMessageAt,
+    this.lastSenderName,
     required this.members,
+    this.unreadCount = 0,
   });
 
   final String id;
@@ -92,7 +119,9 @@ class ConversationSummary {
   final String name;
   final int memberCount;
   final String? lastMessageAt;
+  final String? lastSenderName;
   final List<FamilyMember> members;
+  final int unreadCount;
 
   factory ConversationSummary.fromJson(Map<String, dynamic> j) =>
       ConversationSummary(
@@ -101,6 +130,8 @@ class ConversationSummary {
         name: j['name'] as String? ?? 'Beszélgetés',
         memberCount: j['memberCount'] as int? ?? 0,
         lastMessageAt: j['lastMessageAt'] as String?,
+        lastSenderName: j['lastSenderName'] as String?,
+        unreadCount: j['unreadCount'] as int? ?? 0,
         members: ((j['members'] as List?) ?? [])
             .map((e) => FamilyMember.fromJson({
                   ...Map<String, dynamic>.from(e as Map),
@@ -119,6 +150,7 @@ class VoiceMessage {
     required this.durationMs,
     required this.createdAt,
     required this.url,
+    this.unread = false,
   });
 
   final String id;
@@ -128,6 +160,7 @@ class VoiceMessage {
   final int durationMs;
   final String createdAt;
   final String url;
+  final bool unread;
 
   factory VoiceMessage.fromJson(Map<String, dynamic> j) => VoiceMessage(
         id: j['id'] as String,
@@ -137,6 +170,7 @@ class VoiceMessage {
         durationMs: j['durationMs'] as int? ?? 0,
         createdAt: j['createdAt'] as String? ?? '',
         url: j['url'] as String,
+        unread: j['unread'] as bool? ?? false,
       );
 }
 

@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "hu.dezso.myuzi"
-    compileSdk = maxOf(flutter.compileSdkVersion, 37)
+    // 36 is installed as platforms/android-36; SDK 37 landed as android-37.0 and breaks Gradle lookup.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

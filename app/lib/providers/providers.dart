@@ -10,14 +10,14 @@ class AuthState {
     this.user,
     this.loading = true,
     this.pendingEmail,
-    this.pendingName,
+    this.pendingIsNew = false,
     this.pendingVision = false,
   });
 
   final models.User? user;
   final bool loading;
   final String? pendingEmail;
-  final String? pendingName;
+  final bool pendingIsNew;
   final bool pendingVision;
 
   bool get isLoggedIn => user != null;
@@ -26,7 +26,7 @@ class AuthState {
     models.User? user,
     bool? loading,
     String? pendingEmail,
-    String? pendingName,
+    bool? pendingIsNew,
     bool? pendingVision,
     bool clearUser = false,
     bool clearPending = false,
@@ -35,7 +35,7 @@ class AuthState {
       user: clearUser ? null : (user ?? this.user),
       loading: loading ?? this.loading,
       pendingEmail: clearPending ? null : (pendingEmail ?? this.pendingEmail),
-      pendingName: clearPending ? null : (pendingName ?? this.pendingName),
+      pendingIsNew: clearPending ? false : (pendingIsNew ?? this.pendingIsNew),
       pendingVision: pendingVision ?? this.pendingVision,
     );
   }
@@ -55,22 +55,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> startLogin({
-    required String name,
     required String email,
     required bool visionAssist,
   }) async {
-    await _api.startLogin(name: name, email: email, visionAssist: visionAssist);
+    final isNew = await _api.startLogin(email: email, visionAssist: visionAssist);
     state = state.copyWith(
       pendingEmail: email.trim().toLowerCase(),
-      pendingName: name.trim(),
+      pendingIsNew: isNew,
       pendingVision: visionAssist,
     );
   }
 
-  Future<void> verify(String code) async {
+  Future<void> verify(String code, {String? name}) async {
     final email = state.pendingEmail;
     if (email == null) throw ApiException('Nincs folyamatban lévő belépés');
-    final user = await _api.verifyLogin(email: email, code: code);
+    final user = await _api.verifyLogin(
+      email: email,
+      code: code,
+      name: name,
+      visionAssist: state.pendingVision,
+    );
     state = AuthState(user: user, loading: false);
   }
 
@@ -81,6 +85,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   Future<void> setVisionAssist(bool value) async {
     final user = await _api.updateMe(visionAssist: value);
+    state = state.copyWith(user: user);
+  }
+
+  Future<void> updateProfile({required String name, required String email}) async {
+    final user = await _api.updateMe(name: name, email: email);
     state = state.copyWith(user: user);
   }
 

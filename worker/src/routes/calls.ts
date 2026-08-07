@@ -4,6 +4,7 @@ import { id } from "../lib/crypto";
 import {
   getUserById,
   getUserFamily,
+  hasPaidPlan,
   isConversationMember,
   isFamilyMember,
 } from "../lib/db";
@@ -24,6 +25,15 @@ calls.post("/start", async (c) => {
   const callType = body.callType === "video" ? "video" : "audio";
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ error: "Nincs család" }, 400);
+  if (!hasPaidPlan(family.plan)) {
+    return c.json(
+      {
+        error: "Híváshoz előfizetés kell.",
+        softPaywall: true,
+      },
+      403,
+    );
+  }
 
   const me = c.get("user");
   let participantIds = new Set<string>([me.id]);
@@ -73,6 +83,7 @@ calls.post("/start", async (c) => {
           token: u.push_token,
           title: "Bejövő hívás",
           body: `${me.name} hív (${callType === "video" ? "videó" : "hang"})`,
+          kind: "call",
           data: {
             type: "incoming_call",
             callId,

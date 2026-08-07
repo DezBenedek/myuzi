@@ -14,7 +14,6 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _name = TextEditingController();
   final _email = TextEditingController();
   bool _vision = false;
   bool _busy = false;
@@ -22,7 +21,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   void dispose() {
-    _name.dispose();
     _email.dispose();
     super.dispose();
   }
@@ -34,7 +32,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     try {
       await ref.read(authProvider.notifier).startLogin(
-            name: _name.text,
             email: _email.text,
             visionAssist: _vision,
           );
@@ -59,18 +56,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             Text('MyÜzi', style: t.textTheme.displayLarge),
             const SizedBox(height: 8),
             Text(
-              'Belépés email kóddal — jelszó nem kell.',
+              'Email + kód.',
               style: t.textTheme.bodyLarge,
             ),
             const SizedBox(height: 28),
-            Text('Neved', style: t.textTheme.titleLarge),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _name,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(hintText: 'Pl. Anna'),
-            ),
-            const SizedBox(height: 18),
             Text('Email', style: t.textTheme.titleLarge),
             const SizedBox(height: 8),
             TextField(
@@ -78,6 +67,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               keyboardType: TextInputType.emailAddress,
               autocorrect: false,
               decoration: const InputDecoration(hintText: 'te@email.hu'),
+              onSubmitted: (_) => _submit(),
             ),
             const SizedBox(height: 18),
             SwitchListTile(

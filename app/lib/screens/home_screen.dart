@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 
 import '../models/models.dart';
 import '../providers/providers.dart';
+import '../services/api_client.dart';
+import '../services/app_notify.dart';
 import '../widgets/widgets.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -18,18 +20,53 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _poll;
   String? _incomingCallId;
+  int? _lastUnreadTotal;
+  bool _sheetOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _checkIncoming());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkIncoming());
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _tick());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tick());
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    AppNotify.stopCallRingtone();
     super.dispose();
+  }
+
+  Future<void> _tick() async {
+    await Future.wait([_checkIncoming(), _refreshUnread()]);
+  }
+
+  Future<void> _refreshUnread() async {
+    final auth = ref.read(authProvider);
+    if (!auth.isLoggedIn) return;
+    try {
+      final data = await ref.read(apiProvider).listConversations();
+      if (!mounted) return;
+      final total = data.conversations.fold<int>(0, (s, c) => s + c.unreadCount);
+      final prev = _lastUnreadTotal;
+      if (prev != null && total > prev) {
+        final newest = data.conversations
+            .where((c) => c.unreadCount > 0)
+            .toList()
+          ..sort((a, b) => (b.lastMessageAt ?? '').compareTo(a.lastMessageAt ?? ''));
+        final tip = newest.isEmpty ? null : newest.first;
+        await AppNotify.showMessage(
+          title: tip?.lastSenderName ?? tip?.name ?? 'Új hangüzenet',
+          body: tip == null
+              ? 'Új hangüzeneted érkezett'
+              : '${tip.lastSenderName ?? tip.name} hangüzenetet küldött',
+        );
+      }
+      if (prev != total) {
+        ref.invalidate(homeProvider);
+      }
+      _lastUnreadTotal = total;
+    } catch (_) {}
   }
 
   Future<void> _checkIncoming() async {
@@ -48,15 +85,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         }
       }
       if (_incomingCallId != null && mounted) {
+        await AppNotify.stopCallRingtone();
         setState(() => _incomingCallId = null);
       }
     } catch (_) {}
   }
 
   void _showIncoming(Map<String, dynamic> call) {
+    if (_sheetOpen) return;
+    _sheetOpen = true;
+    AppNotify.startCallRingtone();
     showModalBottomSheet(
       context: context,
       isDismissible: false,
+      enableDrag: false,
       builder: (ctx) {
         return Padding(
           padding: const EdgeInsets.fromLTRB(22, 24, 22, 32),
@@ -74,7 +116,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 label: 'Fogadás',
                 icon: Icons.call,
                 onPressed: () async {
-                  Navigator.pop(ctx);
+                  await AppNotify.stopCallRingtone();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _sheetOpen = false;
                   final session =
                       await ref.read(apiProvider).joinCall(call['id'] as String);
                   if (!mounted) return;
@@ -93,16 +137,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 outlined: true,
                 danger: true,
                 onPressed: () async {
-                  Navigator.pop(ctx);
+                  await AppNotify.stopCallRingtone();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _sheetOpen = false;
                   await ref.read(apiProvider).endCall(call['id'] as String);
-                  setState(() => _incomingCallId = null);
+                  if (mounted) setState(() => _incomingCallId = null);
                 },
               ),
             ],
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      _sheetOpen = false;
+      AppNotify.stopCallRingtone();
+    });
   }
 
   Future<void> _openPerson(FamilyMember person) async {
@@ -113,21 +162,77 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _startCall(FamilyMember person, String type) async {
-    final session = await ref.read(apiProvider).startCall(
-          calleeIds: [person.id],
-          callType: type,
-        );
-    if (!mounted) return;
-    context.push('/call/${session.id}', extra: {
-      'livekitUrl': session.livekitUrl,
-      'token': session.token,
-      'callType': session.callType,
-      'title': person.name,
-    });
+    try {
+      final session = await ref.read(apiProvider).startCall(
+            calleeIds: [person.id],
+            callType: type,
+          );
+      if (!mounted) return;
+      context.push('/call/${session.id}', extra: {
+        'livekitUrl': session.livekitUrl,
+        'token': session.token,
+        'callType': session.callType,
+        'title': person.name,
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<void> _messageByEmail() async {
+    final emailCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Üzenet email alapján'),
+        content: TextField(
+          controller: emailCtrl,
+          keyboardType: TextInputType.emailAddress,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'valaki@email.hu'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Mégse')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Tovább')),
+        ],
+      ),
+    );
+    final email = emailCtrl.text.trim();
+    WidgetsBinding.instance.addPostFrameCallback((_) => emailCtrl.dispose());
+    if (ok != true || email.isEmpty) return;
+
+    try {
+      final result = await ref.read(apiProvider).openDirectByEmail(email);
+      if (!mounted) return;
+      if (result.conversationId != null) {
+        ref.invalidate(homeProvider);
+        context.push('/chat/${result.conversationId}');
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message ?? 'Meghívó elküldve')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 
   Future<void> _createGroup() async {
+    final fam = ref.read(familyProvider).asData?.value.family;
+    if (fam == null || !fam.isPaid) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Csoportot csak előfizetéssel lehet létrehozni.'),
+        ),
+      );
+      return;
+    }
+
     final home = await ref.read(homeProvider.future);
+    if (!mounted) return;
     final me = ref.read(authProvider).user!.id;
     final selected = <String>{};
     final nameCtrl = TextEditingController();
@@ -185,19 +290,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       },
     );
 
-    if (ok == true && nameCtrl.text.trim().length >= 2) {
-      final id = await ref.read(apiProvider).createGroup(
-            name: nameCtrl.text.trim(),
-            memberIds: selected.toList(),
-          );
-      ref.invalidate(homeProvider);
-      if (!mounted) {
-        nameCtrl.dispose();
-        return;
+    final groupName = nameCtrl.text.trim();
+    WidgetsBinding.instance.addPostFrameCallback((_) => nameCtrl.dispose());
+
+    if (ok == true && groupName.length >= 2) {
+      try {
+        final id = await ref.read(apiProvider).createGroup(
+              name: groupName,
+              memberIds: selected.toList(),
+            );
+        ref.invalidate(homeProvider);
+        if (!mounted) return;
+        context.push('/chat/$id');
+      } on ApiException catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+        }
       }
-      context.push('/chat/$id');
     }
-    nameCtrl.dispose();
   }
 
   @override
@@ -237,48 +347,135 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           data: (data) {
             final me = auth.user!.id;
             final others = data.people.where((p) => p.id != me).toList();
+            final fam = family.asData?.value.family;
+            final paid = fam?.isPaid ?? false;
+
+            int unreadForPerson(String personId) {
+              for (final c in data.conversations.where((c) => c.type == 'direct')) {
+                if (c.members.any((m) => m.id == personId)) {
+                  return c.unreadCount;
+                }
+              }
+              return 0;
+            }
+
+            String? previewForPerson(String personId) {
+              for (final c in data.conversations.where((c) => c.type == 'direct')) {
+                if (c.members.any((m) => m.id == personId)) {
+                  if (c.unreadCount > 0) {
+                    return c.unreadCount == 1
+                        ? 'Új hangüzenet'
+                        : '${c.unreadCount} új hangüzenet';
+                  }
+                  if (c.lastMessageAt != null) return 'Hangüzenet';
+                  return null;
+                }
+              }
+              return null;
+            }
+
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
               children: [
                 Text('Szia ${auth.user!.name}!', style: t.textTheme.headlineMedium),
-                const SizedBox(height: 6),
-                Text('Emberek és csoportok', style: t.textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                Text(
+                  fam?.planSummary ?? 'Ingyenes · max 3 fő · 2 perc hang · nincs hívás',
+                  style: t.textTheme.bodyMedium,
+                ),
                 const SizedBox(height: 18),
                 ...others.map(
-                  (p) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: SoftCard(
-                      onTap: () => _openPerson(p),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 28,
-                            backgroundColor: const Color(0xFFD9F2E6),
-                            child: Text(
-                              p.name.isNotEmpty ? p.name.characters.first.toUpperCase() : '?',
-                              style: t.textTheme.titleLarge,
+                  (p) {
+                    final unread = unreadForPerson(p.id);
+                    final preview = previewForPerson(p.id);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: SoftCard(
+                        onTap: () => _openPerson(p),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 28,
+                              backgroundColor: unread > 0
+                                  ? const Color(0xFFB8E6D0)
+                                  : const Color(0xFFD9F2E6),
+                              child: Text(
+                                p.name.isNotEmpty ? p.name.characters.first.toUpperCase() : '?',
+                                style: t.textTheme.titleLarge,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Text(p.name, style: t.textTheme.titleLarge),
-                          ),
-                          IconButton(
-                            tooltip: 'Hanghívás',
-                            onPressed: () => _startCall(p, 'audio'),
-                            icon: const Icon(Icons.call),
-                          ),
-                          IconButton(
-                            tooltip: 'Videó',
-                            onPressed: () => _startCall(p, 'video'),
-                            icon: const Icon(Icons.videocam),
-                          ),
-                        ],
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          p.name,
+                                          style: t.textTheme.titleLarge?.copyWith(
+                                            fontWeight: unread > 0 ? FontWeight.w800 : null,
+                                          ),
+                                        ),
+                                      ),
+                                      if (unread > 0) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: t.colorScheme.primary,
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            '$unread',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  if (preview != null) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      preview,
+                                      style: t.textTheme.bodyMedium?.copyWith(
+                                        fontWeight:
+                                            unread > 0 ? FontWeight.w700 : FontWeight.w400,
+                                        color: unread > 0
+                                            ? t.colorScheme.primary
+                                            : t.colorScheme.onSurface.withValues(alpha: 0.65),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            if (paid) ...[
+                              IconButton(
+                                tooltip: 'Hanghívás',
+                                onPressed: () => _startCall(p, 'audio'),
+                                icon: const Icon(Icons.call),
+                              ),
+                              IconButton(
+                                tooltip: 'Videó',
+                                onPressed: () => _startCall(p, 'video'),
+                                icon: const Icon(Icons.videocam),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
-                if (data.conversations.where((c) => c.type == 'group').isNotEmpty) ...[
+                if (paid && data.conversations.where((c) => c.type == 'group').isNotEmpty) ...[
                   const SizedBox(height: 12),
                   Text('Csoportok', style: t.textTheme.titleLarge),
                   const SizedBox(height: 10),
@@ -292,8 +489,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                 const Icon(Icons.groups_outlined),
                                 const SizedBox(width: 12),
                                 Expanded(
-                                  child: Text(c.name, style: t.textTheme.titleLarge),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        c.name,
+                                        style: t.textTheme.titleLarge?.copyWith(
+                                          fontWeight: c.unreadCount > 0 ? FontWeight.w800 : null,
+                                        ),
+                                      ),
+                                      if (c.unreadCount > 0)
+                                        Text(
+                                          c.lastSenderName != null
+                                              ? '${c.lastSenderName}: új hangüzenet'
+                                              : '${c.unreadCount} új hangüzenet',
+                                          style: t.textTheme.bodyMedium?.copyWith(
+                                            color: t.colorScheme.primary,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
+                                if (c.unreadCount > 0)
+                                  Container(
+                                    margin: const EdgeInsets.only(right: 8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: t.colorScheme.primary,
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      '${c.unreadCount}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
                                 Text('${c.memberCount}', style: t.textTheme.bodyMedium),
                               ],
                             ),
@@ -301,18 +534,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ),
                       ),
                 ],
-                const SizedBox(height: 12),
-                BigButton(
-                  label: 'Új csoport',
-                  icon: Icons.group_add,
-                  outlined: true,
-                  onPressed: _createGroup,
-                ),
               ],
             );
           },
         ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showCreateSheet,
+        tooltip: 'Új kapcsolat vagy csoport',
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  Future<void> _showCreateSheet() async {
+    final paid = ref.read(familyProvider).asData?.value.family?.isPaid ?? false;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.mail_outline),
+                  title: const Text('Email / kapcsolat'),
+                  subtitle: const Text('Üzenet vagy meghívó email alapján'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _messageByEmail();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.group_add_outlined),
+                  title: const Text('Csoport'),
+                  subtitle: Text(paid ? 'Új csoport létrehozása' : 'Előfizetés kell'),
+                  enabled: paid,
+                  onTap: paid
+                      ? () {
+                          Navigator.pop(ctx);
+                          _createGroup();
+                        }
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -79,6 +79,18 @@ button.ghost { background: transparent; color: var(--brand); border: 1px solid v
   display: inline-block; padding: 4px 10px; border-radius: 999px;
   background: #e8f3ee; color: var(--brand); font-size: 0.85rem; font-weight: 700;
 }
+.compare { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 0.95rem; }
+.compare th, .compare td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
+.compare th { color: var(--muted); font-weight: 700; }
+.compare .yes { color: var(--brand); font-weight: 700; }
+.compare .no { color: var(--muted); }
+.plan-pick { display: grid; gap: 10px; margin: 12px 0; }
+.plan-pick label {
+  display: flex; gap: 12px; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0; font-weight: 600;
+  cursor: pointer;
+}
+.plan-pick input { width: auto; margin-top: 4px; }
 .footer { margin-top: 28px; color: var(--muted); font-size: 0.9rem; }
 @media (max-width: 520px) {
   .wrap { padding: 18px 14px 48px; }
@@ -102,7 +114,7 @@ export function layout(title: string, body: string, vision = false): string {
 <body>
   <div class="wrap">
     ${body}
-    <p class="footer">MyÜzi · családi hangüzenetek és hívások · myuzi.dezso.hu</p>
+    <p class="footer">MyÜzi · myuzi.uvmr.app</p>
   </div>
 </body>
 </html>`;
@@ -113,14 +125,12 @@ export function landingPage(): string {
     "Kezdőlap",
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Egyszerű családi hangüzenetek és hívások — telefonon, tableten és számítógépen.</p>
+    <p class="sub">Családi hangüzenetek és hívások.</p>
     <div class="panel">
-      <p class="big">Töltsd le az appot, vagy kezeld a fiókodat a weben.</p>
       <div class="row">
         <a href="/account"><button type="button">Fiókkezelő</button></a>
         <a href="/login"><button class="secondary" type="button">Belépés</button></a>
       </div>
-      <p class="hint" style="margin-top:16px">Hangüzenet · hanghívás · videó · kijelzőmegosztás</p>
     </div>
   `,
   );
@@ -131,11 +141,9 @@ export function loginPage(error = ""): string {
     "Belépés",
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Belépés email kóddal — jelszó nem kell.</p>
+    <p class="sub">Email + kód.</p>
     <div class="panel">
       <form method="POST" action="/login">
-        <label for="name">Neved</label>
-        <input id="name" name="name" required minlength="2" autocomplete="name" />
         <label for="email">Email</label>
         <input id="email" name="email" type="email" required autocomplete="email" />
         <label class="switch">
@@ -150,19 +158,63 @@ export function loginPage(error = ""): string {
   );
 }
 
-export function verifyPage(email: string, error = ""): string {
+export function verifyPage(
+  email: string,
+  error = "",
+  askName = false,
+  verifiedCode = "",
+  opts?: { inviteToken?: string; familyName?: string },
+): string {
+  const inviteToken = opts?.inviteToken ?? "";
+  const familyName = opts?.familyName ?? "";
+  const inviteHidden = inviteToken
+    ? `<input type="hidden" name="inviteToken" value="${escape(inviteToken)}" />`
+    : "";
+  const sub = askName
+    ? "A kód rendben. Add meg a beceneved."
+    : familyName
+      ? `Meghívó: <strong>${escape(familyName)}</strong><br/>Kódot küldtünk ide: <strong>${escape(email)}</strong>`
+      : `Kód: <strong>${escape(email)}</strong>`;
+
   return layout(
-    "Kód",
+    askName ? "Becenév" : familyName ? "Meghívó" : "Kód",
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Írd be a 6 számjegyű kódot, amit elküldtünk ide: <strong>${email}</strong></p>
+    <p class="sub">${sub}</p>
     <div class="panel">
       <form method="POST" action="/login/verify">
-        <input type="hidden" name="email" value="${email}" />
-        <label for="code">Kód</label>
-        <input id="code" name="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" required autocomplete="one-time-code" />
-        <button type="submit">Belépek</button>
+        <input type="hidden" name="email" value="${escape(email)}" />
+        ${inviteHidden}
+        ${
+          askName
+            ? `<input type="hidden" name="code" value="${escape(verifiedCode)}" />
+        <label for="name">Becenév</label>
+        <input id="name" name="name" required minlength="2" autocomplete="nickname" autofocus />
+        <button type="submit">${inviteToken ? "Csatlakozom" : "Belépek"}</button>`
+            : `<label for="code">Kód</label>
+        <input id="code" name="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" required autocomplete="one-time-code" autofocus />
+        <button type="submit">Tovább</button>`
+        }
         ${error ? `<p class="error">${error}</p>` : ""}
+      </form>
+    </div>
+  `,
+  );
+}
+
+/** Invite link without a locked email — ask for email, then we send the PIN. */
+export function inviteEmailPage(familyName: string, token: string, error = ""): string {
+  return layout(
+    "Meghívó",
+    `
+    <h1 class="brand">MyÜzi</h1>
+    <p class="sub">Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.</p>
+    ${error ? `<p class="error">${escape(error)}</p>` : ""}
+    <div class="panel">
+      <form method="POST" action="/invite/${escape(token)}/start">
+        <label for="email">Email címed</label>
+        <input id="email" name="email" type="email" required autocomplete="email" autofocus />
+        <button type="submit">Kód küldése</button>
       </form>
     </div>
   `,
@@ -187,12 +239,14 @@ export function accountPage(opts: {
 }): string {
   const { user, family, members, inviteUrl, message, error } = opts;
   const isOwner = family?.owner_id === user.id;
-  const planLabel =
+  const currentPlan =
     family?.plan === "family_plus"
       ? "Család+"
       : family?.plan === "family"
         ? "Család"
-        : "Nincs előfizetés";
+        : "Ingyenes";
+  const maxShown =
+    family?.plan === "family_plus" ? 25 : family?.plan === "family" ? 6 : 3;
 
   const familyBlock = !family
     ? `
@@ -207,41 +261,84 @@ export function accountPage(opts: {
     : `
       <div class="panel">
         <h2>${escape(family.name)}</h2>
-        <p><span class="pill">${planLabel}</span> · max ${family.max_members} fő · ${members.length} tag</p>
+        <p><span class="pill">${currentPlan}</span> · max ${maxShown} fő · ${members.length} tag</p>
+        <p class="hint">${
+          family.plan === "family_plus"
+            ? "20 perc hangüzenet · hívás · csoport"
+            : family.plan === "family"
+              ? "10 perc hangüzenet · hívás · csoport"
+              : "2 perc hangüzenet · nincs hívás / csoport"
+        }</p>
         <ul class="list">
           ${members
-            .map(
-              (m) =>
-                `<li><span><strong>${escape(m.name)}</strong><br/><span class="hint">${escape(m.email)}</span></span><span class="pill">${m.role === "owner" ? "Tulajdonos" : "Tag"}</span></li>`,
-            )
+            .map((m) => {
+              const canRemove = isOwner && m.id !== user.id && m.role !== "owner";
+              const canLeave = !isOwner && m.id === user.id;
+              return `<li>
+                <span><strong>${escape(m.name)}</strong><br/><span class="hint">${escape(m.email)}</span></span>
+                <span style="display:flex;align-items:center;gap:8px">
+                  <span class="pill">${m.role === "owner" ? "Tulajdonos" : "Tag"}</span>
+                  ${
+                    canRemove
+                      ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Eltávolítod ${escape(m.name)}-t a családból?')">
+                          <input type="hidden" name="userId" value="${escape(m.id)}" />
+                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto">Eltávolít</button>
+                        </form>`
+                      : canLeave
+                        ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Kilépsz a családból?')">
+                          <input type="hidden" name="userId" value="${escape(m.id)}" />
+                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto">Kilépek</button>
+                        </form>`
+                        : ""
+                  }
+                </span>
+              </li>`;
+            })
             .join("")}
         </ul>
         <form method="POST" action="/account/invite" style="margin-top:16px">
-          <label for="inv">Meghívó email (opcionális)</label>
+          <label for="inv">Meghívó email</label>
           <input id="inv" name="email" type="email" placeholder="családtag@email.hu" />
-          <button type="submit">Meghívó link készítése</button>
+          <button type="submit">Meghívó</button>
         </form>
-        ${inviteUrl ? `<p class="ok">Meghívó: <a href="${inviteUrl}">${inviteUrl}</a></p>` : ""}
+        ${inviteUrl ? `<p class="ok"><a href="${inviteUrl}">${inviteUrl}</a></p>` : ""}
       </div>
       ${
         isOwner
           ? `<div class="panel">
-        <h2>Előfizetés</h2>
-        <p class="hint">Csak a tulajdonos fizet. Az appban nincs agresszív paywall — itt tudsz előfizetni.</p>
-        <div class="row">
-          <form method="POST" action="/account/checkout"><input type="hidden" name="plan" value="family" /><button type="submit">Család — 1990 Ft/hó (6 fő)</button></form>
-          <form method="POST" action="/account/checkout"><input type="hidden" name="plan" value="family_plus" /><button class="secondary" type="submit">Család+ — 4990 Ft/hó (25 fő)</button></form>
+        <h2>Csomagok</h2>
+        <table class="compare">
+          <thead>
+            <tr><th></th><th>Ingyenes</th><th>Család</th><th>Család+</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Ár</td><td>0 Ft</td><td>1990 Ft/hó</td><td>4990 Ft/hó</td></tr>
+            <tr><td>Tagok</td><td>3</td><td>6</td><td>25</td></tr>
+            <tr><td>Hangüzenet</td><td>2 perc</td><td>10 perc</td><td>20 perc</td></tr>
+            <tr><td>Hívás</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Csoport</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          </tbody>
+        </table>
+        <div class="plan-pick">
+          <form method="GET" action="/account/billing">
+            <input type="hidden" name="plan" value="family" />
+            <button type="submit" class="${family.plan === "family" ? "" : "secondary"}">Család — 1990 Ft/hó</button>
+          </form>
+          <form method="GET" action="/account/billing">
+            <input type="hidden" name="plan" value="family_plus" />
+            <button type="submit" class="${family.plan === "family_plus" ? "" : "secondary"}">Család+ — 4990 Ft/hó</button>
+          </form>
         </div>
-        <form method="POST" action="/account/portal"><button class="ghost" type="submit">Stripe ügyfélportál</button></form>
+        <form method="POST" action="/account/portal"><button class="ghost" type="submit">Stripe portál</button></form>
       </div>`
-          : `<div class="panel"><p class="hint">Az előfizetést a család tulajdonosa intézi a weben.</p></div>`
+          : ""
       }`;
 
   return layout(
     "Fiók",
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Szia ${escape(user.name)}!</p>
+    <p class="sub">${escape(user.name)}</p>
     ${message ? `<p class="ok">${message}</p>` : ""}
     ${error ? `<p class="error">${error}</p>` : ""}
     <div class="panel">
@@ -260,17 +357,94 @@ export function accountPage(opts: {
   );
 }
 
-export function inviteAcceptPage(familyName: string, token: string, loggedIn: boolean): string {
+export function billingPage(opts: {
+  user: UserRow;
+  plan: "family" | "family_plus";
+  billing?: {
+    billing_type?: string | null;
+    billing_name?: string | null;
+    billing_tax_id?: string | null;
+    billing_address_line1?: string | null;
+    billing_city?: string | null;
+    billing_postal_code?: string | null;
+    billing_country?: string | null;
+  };
+  error?: string;
+}): string {
+  const { user, plan, billing, error } = opts;
+  const isCompany = billing?.billing_type === "company";
+  const planName = plan === "family_plus" ? "Család+" : "Család";
+  const price = plan === "family_plus" ? "4990" : "1990";
+  const savedName = billing?.billing_name ?? "";
+  const savedTax = billing?.billing_tax_id ?? "";
+  const savedAddr = billing?.billing_address_line1 ?? "";
+  const savedCity = billing?.billing_city ?? "";
+  const savedPostal = billing?.billing_postal_code ?? "";
+
+  return layout(
+    "Számlázás",
+    `
+    <h1 class="brand">MyÜzi</h1>
+    <p class="sub">${planName} · ${price} Ft/hó</p>
+    ${error ? `<p class="error">${error}</p>` : ""}
+    <div class="panel">
+      <p class="hint">A számlázási adatok nálunk maradnak (manuális számla). A Stripe nem kéri őket újra.</p>
+      <form method="POST" action="/account/checkout">
+        <input type="hidden" name="plan" value="${plan}" />
+        <label for="billingType">Számlázás</label>
+        <select id="billingType" name="billingType" onchange="document.getElementById('company-fields').style.display=this.value==='company'?'block':'none'">
+          <option value="individual" ${!isCompany ? "selected" : ""}>Magánszemély</option>
+          <option value="company" ${isCompany ? "selected" : ""}>Cég</option>
+        </select>
+        <label for="billingName">Számlázási név</label>
+        <input id="billingName" name="billingName" required minlength="2" value="${escape(savedName)}" autocomplete="organization" />
+        <div id="company-fields" style="display:${isCompany ? "block" : "none"}">
+          <label for="taxId">Adószám</label>
+          <input id="taxId" name="taxId" value="${escape(savedTax)}" />
+        </div>
+        <label for="addressLine1">Cím</label>
+        <input id="addressLine1" name="addressLine1" required value="${escape(savedAddr)}" autocomplete="street-address" />
+        <div class="row">
+          <div>
+            <label for="postalCode">Irányítószám</label>
+            <input id="postalCode" name="postalCode" required value="${escape(savedPostal)}" autocomplete="postal-code" />
+          </div>
+          <div>
+            <label for="city">Város</label>
+            <input id="city" name="city" required value="${escape(savedCity)}" autocomplete="address-level2" />
+          </div>
+        </div>
+        <input type="hidden" name="country" value="${escape(billing?.billing_country || "HU")}" />
+        <button type="submit">Fizetés</button>
+      </form>
+      <form method="GET" action="/account" style="margin-top:8px">
+        <button class="ghost" type="submit">Vissza</button>
+      </form>
+    </div>
+  `,
+    !!user.vision_assist,
+  );
+}
+
+export function inviteAcceptPage(
+  familyName: string,
+  token: string,
+  loggedIn: boolean,
+  error = "",
+): string {
   return layout(
     "Meghívó",
     `
     <h1 class="brand">MyÜzi</h1>
     <p class="sub">Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.</p>
+    ${error ? `<p class="error">${escape(error)}</p>` : ""}
     <div class="panel">
       ${
         loggedIn
-          ? `<form method="POST" action="/invite/${token}/accept"><button type="submit">Csatlakozom</button></form>`
-          : `<p>Előbb lépj be ugyanezzel az emaillel.</p><a href="/login"><button type="button">Belépés</button></a>`
+          ? error
+            ? `<p class="hint">Csatlakozás most nem lehetséges.</p><a href="/account"><button type="button">Fiók</button></a>`
+            : `<form method="POST" action="/invite/${escape(token)}/accept"><button type="submit">Csatlakozom</button></form>`
+          : `<p class="hint">Küldjük a belépési kódot…</p>`
       }
     </div>
   `,

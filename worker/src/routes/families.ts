@@ -63,7 +63,7 @@ families.post("/", async (c) => {
 
   await c.env.DB.batch([
     c.env.DB.prepare(
-      `INSERT INTO families (id, name, owner_id, plan, max_members) VALUES (?, ?, ?, 'none', 6)`,
+      `INSERT INTO families (id, name, owner_id, plan, max_members) VALUES (?, ?, ?, 'none', 3)`,
     ).bind(familyId, name, userId),
     c.env.DB.prepare(
       `INSERT INTO family_members (family_id, user_id, role) VALUES (?, ?, 'owner')`,

@@ -5,11 +5,13 @@ import {
   canAddMember,
   getFamily,
   getUserFamily,
+  hasPaidPlan,
   isFamilyMember,
   memberCount,
   publicFamily,
 } from "../lib/db";
 import { inviteEmail, sendEmail } from "../lib/email";
+import { publicBaseUrl } from "../lib/urls";
 import { requireAuth } from "../middleware/auth";
 
 const invites = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -26,7 +28,9 @@ invites.post("/", requireAuth, async (c) => {
   if (!canAddMember(family, count)) {
     return c.json(
       {
-        error: `Elérted a ${family.max_members} fős limittet. A webes fiókkezelőben válthatsz nagyobb csomagra.`,
+        error: hasPaidPlan(family.plan)
+          ? `Elérted a ${family.max_members} fős limittet. Válts nagyobb csomagra.`
+          : "Ingyenes csomag: max 3 fő. Több taghoz fizess elő.",
         softPaywall: true,
       },
       403,
@@ -44,11 +48,20 @@ invites.post("/", requireAuth, async (c) => {
     .bind(inviteId, family.id, email, token, c.get("userId"), addDays(14))
     .run();
 
-  const inviteUrl = `${c.env.APP_URL}/invite/${token}`;
+  const inviteUrl = `${publicBaseUrl(c.req.url, c.env)}/invite/${token}`;
+  let emailSent = false;
+  let emailWarning: string | undefined;
 
   if (email) {
-    const mail = inviteEmail(c.env.APP_NAME, family.name, c.get("user").name, inviteUrl);
-    await sendEmail(c.env, { to: email, ...mail });
+    try {
+      const mail = inviteEmail(c.env.APP_NAME, family.name, c.get("user").name, inviteUrl);
+      await sendEmail(c.env, { to: email, ...mail });
+      emailSent = true;
+    } catch (err) {
+      console.error("[invite email]", err);
+      emailWarning =
+        "A meghívó link elkészült, de az email küldése nem sikerült. Másold ki a linket.";
+    }
   }
 
   return c.json({
@@ -58,6 +71,8 @@ invites.post("/", requireAuth, async (c) => {
       url: inviteUrl,
       email,
       expiresAt: addDays(14),
+      emailSent,
+      emailWarning,
     },
   });
 });
@@ -124,7 +139,15 @@ invites.post("/:token/accept", requireAuth, async (c) => {
 
   const count = await memberCount(c.env.DB, family.id);
   if (!canAddMember(family, count)) {
-    return c.json({ error: "A család megtelt", softPaywall: true }, 403);
+    return c.json(
+      {
+        error: hasPaidPlan(family.plan)
+          ? "A család megtelt"
+          : "Ingyenes csomag: max 3 fő. A tulajdonosnak elő kell fizetnie.",
+        softPaywall: true,
+      },
+      403,
+    );
   }
 
   if (await isFamilyMember(c.env.DB, family.id, userId)) {

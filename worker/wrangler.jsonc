@@ -7,11 +7,15 @@
 		"nodejs_compat"
 	],
 	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "myuzi.uvmr.app", "custom_domain": true }
+	],
 	"vars": {
 		"APP_NAME": "MyÜzi",
-		"APP_URL": "https://myuzi.dezso.hu",
+		"APP_URL": "https://myuzi.uvmr.app",
 		"LIVEKIT_URL": "wss://call.api.dezso.hu",
-		"FROM_EMAIL": "noreply@dezso.run",
+		"FROM_EMAIL": "myuzi@uvmr.app",
 		"STRIPE_PRICE_FAMILY": "price_1U1vXfJTnIjHbpTm33GlkrsC",
 		"STRIPE_PRICE_FAMILY_PLUS": "price_1U1vY6JTnIjHbpTmEVzGxpda"
 	},
@@ -33,7 +37,7 @@
 		{
 			"name": "EMAIL",
 			"allowed_sender_addresses": [
-				"noreply@dezso.run"
+				"myuzi@uvmr.app"
 			]
 		}
 	],

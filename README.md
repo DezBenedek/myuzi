@@ -3,9 +3,9 @@
 Egyszerű családi kommunikációs alkalmazás: hangüzenetek, hang- és videóhívás, kijelzőmegosztás.
 
 - **App:** MyÜzi  
-- **Domain:** https://myuzi.dezso.hu  
+- **Domain:** https://myuzi.uvmr.app  
 - **LiveKit:** `wss://call.api.dezso.hu`  
-- **Email:** Cloudflare Email Service → `noreply@dezso.run`
+- **Email:** Cloudflare Email Service → `myuzi@uvmr.app`
 
 ## Struktúra
 
@@ -31,10 +31,11 @@ app/      Flutter (Android, iOS, Windows, macOS, Linux)
 
 ### Előfizetések
 
-| Csomag   | Ár          | Max tag |
-|----------|-------------|---------|
-| Család   | 1990 Ft/hó  | 6       |
-| Család+  | 4990 Ft/hó  | 25      |
+| Csomag    | Ár          | Max tag | Hangüzenet | Hívás | Csoport |
+|-----------|-------------|---------|------------|-------|---------|
+| Ingyenes  | 0 Ft        | 3       | 2 perc     | —     | —       |
+| Család    | 1990 Ft/hó  | 6       | 10 perc    | ✓     | ✓       |
+| Család+   | 4990 Ft/hó  | 25      | 20 perc    | ✓     | ✓       |
 
 Csak a család tulajdonosa fizet.
 
@@ -59,10 +60,12 @@ npx wrangler secret put SESSION_SECRET
 npx wrangler secret put LIVEKIT_API_KEY
 npx wrangler secret put LIVEKIT_API_SECRET
 npx wrangler secret put STRIPE_SECRET_KEY
+# sk_live_… vagy sk_test_…  (SOHA ne whsec_… — az a webhook secret)
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
+# whsec_…
 
 # Email: Cloudflare Email Service
-# Dashboard → Compute → Email Service → Email Sending → Onboard Domain (dezso.run)
+# Dashboard → Compute → Email Service → Email Sending → Onboard Domain (uvmr.app)
 # A Worker `EMAIL` bindingje a wrangler.jsonc-ben van (send_email).
 
 # Stripe price ID-k a wrangler.jsonc vars-ban:
@@ -71,9 +74,8 @@ npx wrangler secret put STRIPE_WEBHOOK_SECRET
 npm run deploy
 ```
 
-DNS: `myuzi.dezso.hu` → Worker route (lásd `wrangler.jsonc`).
-
-Stripe webhook endpoint: `https://myuzi.dezso.hu/api/billing/webhook`
+Domain: `myuzi.uvmr.app` (custom domain a wrangler `routes`-ban).  
+Stripe webhook: `https://myuzi.uvmr.app/api/billing/webhook`
 
 ### Helyi fejlesztés
 
@@ -98,8 +100,8 @@ Artifacts: Actions run → Artifacts → `myuzi-android-apk` / `myuzi-android-aa
 cd app
 flutter pub get
 
-# Production API
-flutter run --dart-define=API_BASE_URL=https://myuzi.dezso.hu
+# Production
+flutter run --dart-define=API_BASE_URL=https://myuzi.uvmr.app
 
 # Helyi Worker
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8787

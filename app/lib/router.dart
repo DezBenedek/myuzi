@@ -14,8 +14,21 @@ import '../screens/verify_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
-  ref.listen(authProvider, (_, __) => refresh.value++);
-  ref.listen(familyProvider, (_, __) => refresh.value++);
+  ref.listen(authProvider, (prev, next) {
+    // Only remount routes on session/loading changes — not profile edits.
+    if (prev?.isLoggedIn != next.isLoggedIn || prev?.loading != next.loading) {
+      refresh.value++;
+    }
+  });
+  ref.listen(familyProvider, (prev, next) {
+    final prevId = prev?.asData?.value.family?.id;
+    final nextId = next.asData?.value.family?.id;
+    final prevLoading = prev?.isLoading ?? false;
+    final nextLoading = next.isLoading;
+    if (prevId != nextId || prevLoading != nextLoading) {
+      refresh.value++;
+    }
+  });
   ref.onDispose(refresh.dispose);
 
   return GoRouter(

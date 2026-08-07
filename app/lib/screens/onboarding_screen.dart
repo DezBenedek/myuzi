@@ -73,7 +73,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             Text('Család', style: t.textTheme.displayLarge),
             const SizedBox(height: 8),
             Text(
-              'Hozz létre új családot, vagy fogadj el egy meghívót.',
+              'Hozz létre családot, vagy fogadj el meghívót.',
               style: t.textTheme.bodyLarge,
             ),
             const SizedBox(height: 28),

@@ -51,12 +51,12 @@ jobs:
       - name: Build release APK
         run: >
           flutter build apk --release
-          --dart-define=API_BASE_URL=https://myuzi.dezso.hu
+          --dart-define=API_BASE_URL=https://myuzi.uvmr.app
 
       - name: Build App Bundle
         run: >
           flutter build appbundle --release
-          --dart-define=API_BASE_URL=https://myuzi.dezso.hu
+          --dart-define=API_BASE_URL=https://myuzi.uvmr.app
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

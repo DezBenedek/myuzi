@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Env, Variables } from "../types";
 import { getFamily, getUserFamily, publicFamily } from "../lib/db";
-import { getStripe, maxMembersForPlan, planFromPriceId, PLAN_PRICES_HUF } from "../lib/stripe";
+import { getStripe, maxMembersForPlan, planFromPriceId, PLAN_FEATURES, PLAN_PRICES_HUF } from "../lib/stripe";
+import { publicBaseUrl } from "../lib/urls";
 import { requireAuth } from "../middleware/auth";
 
 const billing = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -9,18 +10,13 @@ const billing = new Hono<{ Bindings: Env; Variables: Variables }>();
 billing.get("/plans", (c) => {
   return c.json({
     plans: [
+      PLAN_FEATURES.free,
       {
-        id: "family",
-        name: "Család",
-        priceHuf: PLAN_PRICES_HUF.family,
-        maxMembers: 6,
+        ...PLAN_FEATURES.family,
         priceId: c.env.STRIPE_PRICE_FAMILY,
       },
       {
-        id: "family_plus",
-        name: "Család+",
-        priceHuf: PLAN_PRICES_HUF.family_plus,
-        maxMembers: 25,
+        ...PLAN_FEATURES.family_plus,
         priceId: c.env.STRIPE_PRICE_FAMILY_PLUS,
       },
     ],
@@ -63,17 +59,20 @@ billing.post("/checkout", requireAuth, async (c) => {
   const priceId =
     plan === "family" ? c.env.STRIPE_PRICE_FAMILY : c.env.STRIPE_PRICE_FAMILY_PLUS;
 
+  const base = publicBaseUrl(c.req.url, c.env);
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${c.env.APP_URL}/account?billing=success`,
-    cancel_url: `${c.env.APP_URL}/account?billing=cancel`,
+    success_url: `${base}/account?billing=success`,
+    cancel_url: `${base}/account?billing=cancel`,
     metadata: { familyId: family.id, plan },
     subscription_data: {
       metadata: { familyId: family.id, plan },
     },
     allow_promotion_codes: true,
+    // Billing details are collected in-app and stored in D1 for manual invoicing.
+    billing_address_collection: "auto",
   });
 
   return c.json({ url: session.url });
@@ -92,7 +91,7 @@ billing.post("/portal", requireAuth, async (c) => {
   const stripe = getStripe(c.env);
   const portal = await stripe.billingPortal.sessions.create({
     customer: family.stripe_customer_id,
-    return_url: `${c.env.APP_URL}/account`,
+    return_url: `${publicBaseUrl(c.req.url, c.env)}/account`,
   });
 
   return c.json({ url: portal.url });
@@ -157,7 +156,7 @@ billing.post("/webhook", async (c) => {
       if (event.type === "customer.subscription.deleted" || sub.status === "canceled") {
         await c.env.DB.prepare(
           `UPDATE families SET plan = 'none', stripe_subscription_id = NULL,
-           stripe_status = ?, max_members = 6, updated_at = datetime('now') WHERE id = ?`,
+           stripe_status = ?, max_members = 3, updated_at = datetime('now') WHERE id = ?`,
         )
           .bind(sub.status, familyId)
           .run();
@@ -190,10 +189,7 @@ billing.get("/status", requireAuth, async (c) => {
   return c.json({
     family: publicFamily(family),
     isOwner: family.owner_id === c.get("userId"),
-    plans: [
-      { id: "family", name: "Család", priceHuf: 1990, maxMembers: 6 },
-      { id: "family_plus", name: "Család+", priceHuf: 4990, maxMembers: 25 },
-    ],
+    plans: [PLAN_FEATURES.free, PLAN_FEATURES.family, PLAN_FEATURES.family_plus],
   });
 });
 

@@ -29,6 +29,7 @@ app.get("/health", (c) =>
     ok: true,
     app: c.env.APP_NAME,
     livekit: c.env.LIVEKIT_URL,
+    url: c.env.APP_URL,
   }),
 );
 

@@ -8,10 +8,16 @@ import '../config.dart';
 import '../models/models.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode, this.softPaywall = false});
+  ApiException(
+    this.message, {
+    this.statusCode,
+    this.softPaywall = false,
+    this.needsName = false,
+  });
   final String message;
   final int? statusCode;
   final bool softPaywall;
+  final bool needsName;
 
   @override
   String toString() => message;
@@ -22,12 +28,18 @@ class ApiClient {
 
   final http.Client _client;
   String? _token;
+  String _baseUrl = AppConfig.primaryBaseUrl;
 
   String? get token => _token;
+  String get baseUrl => _baseUrl;
+  String get webAccountUrl => AppConfig.webAccountUrlFor(_baseUrl);
 
   Future<void> loadSession() async {
     final prefs = await SharedPreferences.getInstance();
     _token = prefs.getString('session_token');
+    // Always use canonical host; drop stale workers.dev from older installs
+    _baseUrl = AppConfig.primaryBaseUrl;
+    await prefs.setString('api_base_url', _baseUrl);
   }
 
   Future<void> saveSession(String token) async {
@@ -42,17 +54,26 @@ class ApiClient {
     await prefs.remove('session_token');
   }
 
-  Uri _u(String path, [Map<String, String>? query]) =>
-      Uri.parse('${AppConfig.apiBaseUrl}$path').replace(queryParameters: query);
-
   Map<String, String> _headers({Map<String, String>? extra, bool json = true}) {
-    final h = <String, String>{
+    return {
       if (json) 'Content-Type': 'application/json',
       'X-Client': 'flutter',
       if (_token != null) 'Authorization': 'Bearer $_token',
       ...?extra,
     };
-    return h;
+  }
+
+  Future<http.Response> _send(
+    Future<http.Response> Function(Uri uri) request, {
+    required String path,
+    Map<String, String>? query,
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: query);
+    try {
+      return await request(uri).timeout(const Duration(seconds: 20));
+    } catch (e) {
+      throw ApiException('Nem elérhető a szerver (${AppConfig.primaryBaseUrl}). $e');
+    }
   }
 
   Future<Map<String, dynamic>> _json(http.Response res) async {
@@ -66,33 +87,49 @@ class ApiClient {
         body['error'] as String? ?? 'Hiba (${res.statusCode})',
         statusCode: res.statusCode,
         softPaywall: body['softPaywall'] == true,
+        needsName: body['needsName'] == true,
       );
     }
     return body;
   }
 
-  Future<void> startLogin({
-    required String name,
+  Future<bool> startLogin({
     required String email,
     required bool visionAssist,
   }) async {
-    final res = await _client.post(
-      _u('/api/auth/start'),
-      headers: _headers(),
-      body: jsonEncode({
-        'name': name,
-        'email': email,
-        'visionAssist': visionAssist,
-      }),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({
+          'email': email,
+          'visionAssist': visionAssist,
+        }),
+      ),
+      path: '/api/auth/start',
     );
-    await _json(res);
+    final body = await _json(res);
+    return body['isNew'] == true;
   }
 
-  Future<User> verifyLogin({required String email, required String code}) async {
-    final res = await _client.post(
-      _u('/api/auth/verify'),
-      headers: _headers(),
-      body: jsonEncode({'email': email, 'code': code}),
+  Future<User> verifyLogin({
+    required String email,
+    required String code,
+    String? name,
+    bool? visionAssist,
+  }) async {
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({
+          'email': email,
+          'code': code,
+          if (name != null && name.isNotEmpty) 'name': name,
+          if (visionAssist != null) 'visionAssist': visionAssist,
+        }),
+      ),
+      path: '/api/auth/verify',
     );
     final body = await _json(res);
     await saveSession(body['token'] as String);
@@ -102,37 +139,62 @@ class ApiClient {
   Future<User?> me() async {
     if (_token == null) return null;
     try {
-      final res = await _client.get(_u('/api/auth/me'), headers: _headers());
+      final res = await _send(
+        (uri) => _client.get(uri, headers: _headers()),
+        path: '/api/auth/me',
+      );
       final body = await _json(res);
       return User.fromJson(body['user'] as Map<String, dynamic>);
-    } on ApiException {
-      await clearSession();
-      return null;
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        await clearSession();
+        return null;
+      }
+      rethrow;
     }
   }
 
   Future<void> logout() async {
     try {
-      await _client.post(_u('/api/auth/logout'), headers: _headers());
+      await _send(
+        (uri) => _client.post(uri, headers: _headers()),
+        path: '/api/auth/logout',
+      );
     } catch (_) {}
     await clearSession();
   }
 
-  Future<User> updateMe({String? name, bool? visionAssist}) async {
-    final res = await _client.patch(
-      _u('/api/auth/me'),
-      headers: _headers(),
-      body: jsonEncode({
-        if (name != null) 'name': name,
-        if (visionAssist != null) 'visionAssist': visionAssist,
-      }),
+  Future<User> updateMe({String? name, String? email, bool? visionAssist}) async {
+    final res = await _send(
+      (uri) => _client.patch(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (email != null) 'email': email,
+          if (visionAssist != null) 'visionAssist': visionAssist,
+        }),
+      ),
+      path: '/api/auth/me',
     );
     final body = await _json(res);
     return User.fromJson(body['user'] as Map<String, dynamic>);
   }
 
+  Future<String> createWebAccountLink() async {
+    final res = await _send(
+      (uri) => _client.post(uri, headers: _headers()),
+      path: '/api/auth/web-link',
+    );
+    final body = await _json(res);
+    return body['url'] as String;
+  }
+
   Future<({Family? family, List<FamilyMember> members})> myFamily() async {
-    final res = await _client.get(_u('/api/families/mine'), headers: _headers());
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/families/mine',
+    );
     final body = await _json(res);
     final familyJson = body['family'];
     return (
@@ -146,34 +208,43 @@ class ApiClient {
   }
 
   Future<Family> createFamily(String name) async {
-    final res = await _client.post(
-      _u('/api/families'),
-      headers: _headers(),
-      body: jsonEncode({'name': name}),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'name': name}),
+      ),
+      path: '/api/families',
     );
     final body = await _json(res);
     return Family.fromJson(body['family'] as Map<String, dynamic>);
   }
 
   Future<String> createInvite({String? email}) async {
-    final res = await _client.post(
-      _u('/api/invites'),
-      headers: _headers(),
-      body: jsonEncode({if (email != null && email.isNotEmpty) 'email': email}),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({if (email != null && email.isNotEmpty) 'email': email}),
+      ),
+      path: '/api/invites',
     );
     final body = await _json(res);
     return (body['invite'] as Map)['url'] as String;
   }
 
   Future<Map<String, dynamic>> getInvite(String token) async {
-    final res = await _client.get(_u('/api/invites/$token'), headers: _headers());
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/invites/$token',
+    );
     return _json(res);
   }
 
   Future<Family> acceptInvite(String token) async {
-    final res = await _client.post(
-      _u('/api/invites/$token/accept'),
-      headers: _headers(),
+    final res = await _send(
+      (uri) => _client.post(uri, headers: _headers()),
+      path: '/api/invites/$token/accept',
     );
     final body = await _json(res);
     return Family.fromJson(body['family'] as Map<String, dynamic>);
@@ -181,8 +252,10 @@ class ApiClient {
 
   Future<({List<ConversationSummary> conversations, List<FamilyMember> people})>
       listConversations() async {
-    final res =
-        await _client.get(_u('/api/conversations'), headers: _headers());
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/conversations',
+    );
     final body = await _json(res);
     return (
       conversations: ((body['conversations'] as List?) ?? [])
@@ -197,37 +270,70 @@ class ApiClient {
   }
 
   Future<String> openDirect(String userId) async {
-    final res = await _client.post(
-      _u('/api/conversations/direct'),
-      headers: _headers(),
-      body: jsonEncode({'userId': userId}),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'userId': userId}),
+      ),
+      path: '/api/conversations/direct',
     );
     final body = await _json(res);
     return body['conversationId'] as String;
+  }
+
+  /// Opens DM if email is a family member; otherwise invites them (paid).
+  Future<({String? conversationId, String? inviteUrl, String? message})>
+      openDirectByEmail(String email) async {
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'email': email}),
+      ),
+      path: '/api/conversations/direct-by-email',
+    );
+    final body = await _json(res);
+    return (
+      conversationId: body['conversationId'] as String?,
+      inviteUrl: body['inviteUrl'] as String?,
+      message: body['message'] as String?,
+    );
   }
 
   Future<String> createGroup({
     required String name,
     required List<String> memberIds,
   }) async {
-    final res = await _client.post(
-      _u('/api/conversations/group'),
-      headers: _headers(),
-      body: jsonEncode({'name': name, 'memberIds': memberIds}),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'name': name, 'memberIds': memberIds}),
+      ),
+      path: '/api/conversations/group',
     );
     final body = await _json(res);
     return body['conversationId'] as String;
   }
 
   Future<List<VoiceMessage>> listMessages(String conversationId) async {
-    final res = await _client.get(
-      _u('/api/messages/$conversationId'),
-      headers: _headers(),
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/messages/$conversationId',
     );
     final body = await _json(res);
     return ((body['messages'] as List?) ?? [])
         .map((e) => VoiceMessage.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    final res = await _send(
+      (uri) => _client.delete(uri, headers: _headers()),
+      path: '/api/messages/item/$messageId',
+    );
+    await _json(res);
   }
 
   Future<VoiceMessage> uploadVoice({
@@ -236,27 +342,34 @@ class ApiClient {
     required String contentType,
     required int durationMs,
   }) async {
-    final res = await _client.post(
-      _u('/api/messages/$conversationId'),
-      headers: _headers(
-        json: false,
-        extra: {
-          'Content-Type': contentType,
-          'X-Duration-Ms': '$durationMs',
-        },
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(
+          json: false,
+          extra: {
+            'Content-Type': contentType,
+            'X-Duration-Ms': '$durationMs',
+          },
+        ),
+        body: bytes,
       ),
-      body: bytes,
+      path: '/api/messages/$conversationId',
     );
     final body = await _json(res);
     return VoiceMessage.fromJson({
       ...Map<String, dynamic>.from(body['message'] as Map),
       'senderName': '',
       'createdAt': DateTime.now().toIso8601String(),
+      'unread': false,
     });
   }
 
   Future<Uint8List> downloadAudio(String path) async {
-    final res = await _client.get(_u(path), headers: _headers(json: false));
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers(json: false)),
+      path: path,
+    );
     if (res.statusCode >= 400) {
       throw ApiException('Nem sikerült lejátszani', statusCode: res.statusCode);
     }
@@ -268,48 +381,71 @@ class ApiClient {
     List<String>? calleeIds,
     required String callType,
   }) async {
-    final res = await _client.post(
-      _u('/api/calls/start'),
-      headers: _headers(),
-      body: jsonEncode({
-        if (conversationId != null) 'conversationId': conversationId,
-        if (calleeIds != null) 'calleeIds': calleeIds,
-        'callType': callType,
-      }),
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({
+          if (conversationId != null) 'conversationId': conversationId,
+          if (calleeIds != null) 'calleeIds': calleeIds,
+          'callType': callType,
+        }),
+      ),
+      path: '/api/calls/start',
     );
     final body = await _json(res);
     return CallSession.fromJson(body['call'] as Map<String, dynamic>);
   }
 
   Future<CallSession> joinCall(String callId) async {
-    final res = await _client.post(
-      _u('/api/calls/$callId/join'),
-      headers: _headers(),
+    final res = await _send(
+      (uri) => _client.post(uri, headers: _headers()),
+      path: '/api/calls/$callId/join',
     );
     final body = await _json(res);
     return CallSession.fromJson(body['call'] as Map<String, dynamic>);
   }
 
   Future<void> endCall(String callId) async {
-    await _client.post(_u('/api/calls/$callId/end'), headers: _headers());
+    await _send(
+      (uri) => _client.post(uri, headers: _headers()),
+      path: '/api/calls/$callId/end',
+    );
   }
 
   Future<List<Map<String, dynamic>>> activeCalls() async {
-    final res = await _client.get(_u('/api/calls/active'), headers: _headers());
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/calls/active',
+    );
     final body = await _json(res);
     return ((body['calls'] as List?) ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
   }
 
+  Future<void> removeFamilyMember({
+    required String familyId,
+    required String userId,
+  }) async {
+    final res = await _send(
+      (uri) => _client.delete(uri, headers: _headers(json: false)),
+      path: '/api/families/$familyId/members/$userId',
+    );
+    await _json(res);
+  }
+
   Future<void> registerPushToken({
     required String token,
     required String platform,
   }) async {
-    await _client.post(
-      _u('/api/devices/push-token'),
-      headers: _headers(),
-      body: jsonEncode({'token': token, 'platform': platform}),
+    await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'token': token, 'platform': platform}),
+      ),
+      path: '/api/devices/push-token',
     );
   }
 }

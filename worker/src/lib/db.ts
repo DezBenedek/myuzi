@@ -1,4 +1,5 @@
 import type { Env, FamilyRow, UserRow } from "../types";
+import { hasPaidPlan, maxMembersForPlan, voiceMaxMsForPlan } from "./stripe";
 
 export async function getUserById(db: D1Database, id: string): Promise<UserRow | null> {
   return await db.prepare("SELECT * FROM users WHERE id = ?").bind(id).first<UserRow>();
@@ -78,13 +79,14 @@ export function publicFamily(f: FamilyRow & { role?: string }) {
     ownerId: f.owner_id,
     plan: f.plan,
     stripeStatus: f.stripe_status,
-    maxMembers: f.max_members,
+    maxMembers: maxMembersForPlan(f.plan),
     role: f.role,
   };
 }
 
-/** Soft gate: family can exist without paid plan; only soft hints on web. */
+/** Soft seat limit based on plan (free = 3). */
 export function canAddMember(family: FamilyRow, count: number): boolean {
-  const limit = family.plan === "family_plus" ? 25 : family.plan === "family" ? 6 : 6;
-  return count < limit;
+  return count < maxMembersForPlan(family.plan);
 }
+
+export { hasPaidPlan, voiceMaxMsForPlan };

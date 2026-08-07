@@ -50,10 +50,11 @@ class BigButton extends StatelessWidget {
 }
 
 class SoftCard extends StatelessWidget {
-  const SoftCard({super.key, required this.child, this.onTap});
+  const SoftCard({super.key, required this.child, this.onTap, this.onLongPress});
 
   final Widget child;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -70,6 +71,7 @@ class SoftCard extends StatelessWidget {
       ),
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),

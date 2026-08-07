@@ -1,9 +1,14 @@
 /// MyÜzi app configuration.
 class AppConfig {
   static const appName = 'MyÜzi';
-  static const apiBaseUrl = String.fromEnvironment(
+
+  /// Canonical API / web host (no workers.dev).
+  static const primaryBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://myuzi.dezso.hu',
+    defaultValue: 'https://myuzi.uvmr.app',
   );
-  static const webAccountUrl = '$apiBaseUrl/account';
+
+  static const apiCandidates = [primaryBaseUrl];
+
+  static String webAccountUrlFor(String base) => '$base/account';
 }
