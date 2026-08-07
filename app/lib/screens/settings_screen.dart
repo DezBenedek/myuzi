@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -110,7 +112,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             userId: member.id,
           );
       ref.invalidate(familyProvider);
-      ref.invalidate(homeProvider);
+      unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

@@ -32,6 +32,7 @@ import {
   inviteEmailPage,
   landingPage,
   loginPage,
+  plansPage,
   verifyPage,
 } from "../web/pages";
 import type { UserRow } from "../types";
@@ -447,6 +448,14 @@ web.post("/account/vision", optionalAuth, async (c) => {
   return c.redirect("/account");
 });
 
+web.get("/account/plans", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+  const family = await getUserFamily(c.env.DB, user.id);
+  if (!family || family.owner_id !== user.id) return c.redirect("/account");
+  return c.html(plansPage({ user, currentPlan: family.plan }));
+});
+
 web.get("/account/billing", optionalAuth, async (c) => {
   const user = c.get("user");
   if (!user) return c.redirect("/login");
@@ -454,7 +463,7 @@ web.get("/account/billing", optionalAuth, async (c) => {
   if (!family || family.owner_id !== user.id) return c.redirect("/account");
 
   const plan = String(c.req.query("plan") ?? "");
-  if (plan !== "family" && plan !== "family_plus") return c.redirect("/account");
+  if (plan !== "family" && plan !== "family_plus") return c.redirect("/account/plans");
 
   return c.html(billingPage({ user, plan, billing: family }));
 });
@@ -467,7 +476,7 @@ web.post("/account/checkout", optionalAuth, async (c) => {
 
   const form = await c.req.parseBody();
   const plan = String(form.plan ?? "");
-  if (plan !== "family" && plan !== "family_plus") return c.redirect("/account");
+  if (plan !== "family" && plan !== "family_plus") return c.redirect("/account/plans");
 
   const billingType = String(form.billingType ?? "individual");
   const billingName = String(form.billingName ?? "").trim();

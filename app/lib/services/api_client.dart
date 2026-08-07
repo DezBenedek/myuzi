@@ -317,10 +317,18 @@ class ApiClient {
     return body['conversationId'] as String;
   }
 
-  Future<List<VoiceMessage>> listMessages(String conversationId) async {
+  Future<List<VoiceMessage>> listMessages(
+    String conversationId, {
+    int limit = 50,
+    String? before,
+  }) async {
     final res = await _send(
       (uri) => _client.get(uri, headers: _headers()),
       path: '/api/messages/$conversationId',
+      query: {
+        'limit': '$limit',
+        if (before != null) 'before': before,
+      },
     );
     final body = await _json(res);
     return ((body['messages'] as List?) ?? [])

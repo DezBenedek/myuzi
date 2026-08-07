@@ -63,7 +63,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         );
       }
       if (prev != total) {
-        ref.invalidate(homeProvider);
+        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       }
       _lastUnreadTotal = total;
     } catch (_) {}
@@ -206,7 +206,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final result = await ref.read(apiProvider).openDirectByEmail(email);
       if (!mounted) return;
       if (result.conversationId != null) {
-        ref.invalidate(homeProvider);
+        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
         context.push('/chat/${result.conversationId}');
         return;
       }
@@ -231,8 +231,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return;
     }
 
-    final home = await ref.read(homeProvider.future);
-    if (!mounted) return;
+    await ref.read(homeNotifierProvider.notifier).refresh(silent: true);
+    final home = ref.read(homeNotifierProvider).asData?.value;
+    if (!mounted || home == null) return;
     final me = ref.read(authProvider).user!.id;
     final selected = <String>{};
     final nameCtrl = TextEditingController();
@@ -299,7 +300,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               name: groupName,
               memberIds: selected.toList(),
             );
-        ref.invalidate(homeProvider);
+        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
         if (!mounted) return;
         context.push('/chat/$id');
       } on ApiException catch (e) {
@@ -330,9 +331,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          ref.invalidate(homeProvider);
           ref.invalidate(familyProvider);
-          await ref.read(homeProvider.future);
+          await ref.read(homeNotifierProvider.notifier).refresh();
         },
         child: home.when(
           loading: () => const Center(child: CircularProgressIndicator()),

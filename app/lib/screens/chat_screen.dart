@@ -11,6 +11,8 @@ import 'package:record/record.dart';
 import '../models/models.dart';
 import '../providers/providers.dart';
 import '../services/api_client.dart';
+import '../services/local_cache.dart';
+import '../widgets/voice_wave_bubble.dart';
 import '../widgets/widgets.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -32,11 +34,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   DateTime? _recordStarted;
   Duration _recordElapsed = Duration.zero;
   String? _playingId;
+  double _playProgress = 0;
   String? _error;
   String _title = 'Beszélgetés';
   Timer? _refresh;
   Timer? _recordTick;
   Timer? _maxRecordTimer;
+  StreamSubscription<Duration>? _posSub;
+  StreamSubscription<void>? _completeSub;
   bool _sending = false;
 
   int get _maxRecordMs {
@@ -47,8 +52,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
-    _refresh = Timer.periodic(const Duration(seconds: 8), (_) => _load(silent: true));
+    _completeSub = _player.onPlayerComplete.listen((_) {
+      if (mounted) {
+        setState(() {
+          _playingId = null;
+          _playProgress = 0;
+        });
+      }
+    });
+    _posSub = _player.onPositionChanged.listen((pos) async {
+      if (!mounted || _playingId == null) return;
+      final dur = await _player.getDuration();
+      if (dur == null || dur.inMilliseconds <= 0) return;
+      setState(() => _playProgress = pos.inMilliseconds / dur.inMilliseconds);
+    });
+    _boot();
+    _refresh = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true));
   }
 
   @override
@@ -56,10 +75,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _refresh?.cancel();
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
+    _posSub?.cancel();
+    _completeSub?.cancel();
     _scroll.dispose();
     _recorder.dispose();
     _player.dispose();
     super.dispose();
+  }
+
+  Future<void> _boot() async {
+    final cached = await LocalCache.loadMessages(widget.conversationId);
+    final home = ref.read(homeNotifierProvider).asData?.value;
+    final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
+    if (mounted) {
+      setState(() {
+        if (cached != null && cached.isNotEmpty) {
+          _messages = cached;
+          _loading = false;
+        }
+        if (conv != null) _title = conv.name;
+      });
+      if (cached != null && cached.isNotEmpty) _scrollToBottom();
+    }
+    await _load();
   }
 
   void _scrollToBottom({bool animate = false}) {
@@ -79,23 +117,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _load({bool silent = false}) async {
-    if (!silent) setState(() => _loading = true);
+    if (!silent && _messages.isEmpty) {
+      setState(() => _loading = true);
+    }
     try {
       final api = ref.read(apiProvider);
-      final messages = await api.listMessages(widget.conversationId);
-      final detail = await api.listConversations();
-      final conv = detail.conversations
-          .where((c) => c.id == widget.conversationId)
-          .firstOrNull;
+      final messages = await api.listMessages(widget.conversationId, limit: 50);
+      await LocalCache.saveMessages(widget.conversationId, messages);
+      unawaited(LocalCache.prefetchAudio(api, messages, keep: 8));
+
+      final home = ref.read(homeNotifierProvider).asData?.value;
+      final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
+
       if (mounted) {
         setState(() {
           _messages = messages;
-          _title = conv?.name ?? _title;
+          if (conv != null) _title = conv.name;
           _loading = false;
           _error = null;
         });
-        _scrollToBottom();
-        ref.invalidate(homeProvider);
+        if (!silent) _scrollToBottom();
+        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       }
     } on ApiException catch (e) {
       if (mounted) {
@@ -163,14 +205,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (duration > maxMs) duration = maxMs;
     final bytes = await File(path).readAsBytes();
     try {
-      await ref.read(apiProvider).uploadVoice(
+      final msg = await ref.read(apiProvider).uploadVoice(
             conversationId: widget.conversationId,
             bytes: bytes,
             contentType: 'audio/m4a',
             durationMs: duration,
           );
-      await _load();
-      _scrollToBottom(animate: true);
+      final me = ref.read(authProvider).user!;
+      final local = VoiceMessage(
+        id: msg.id,
+        conversationId: widget.conversationId,
+        senderId: me.id,
+        senderName: me.name,
+        durationMs: duration,
+        createdAt: DateTime.now().toIso8601String(),
+        url: msg.url,
+      );
+      await LocalCache.putAudio(msg.id, bytes);
+      if (mounted) {
+        setState(() => _messages = [..._messages, local]);
+        await LocalCache.saveMessages(widget.conversationId, _messages);
+        _scrollToBottom(animate: true);
+      }
+      unawaited(_load(silent: true));
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
@@ -189,18 +246,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _play(VoiceMessage msg) async {
     if (_playingId == msg.id) {
       await _player.stop();
-      setState(() => _playingId = null);
+      setState(() {
+        _playingId = null;
+        _playProgress = 0;
+      });
       return;
     }
-    final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/${msg.id}.m4a');
-    await file.writeAsBytes(bytes, flush: true);
-    setState(() => _playingId = msg.id);
-    await _player.play(DeviceFileSource(file.path));
-    _player.onPlayerComplete.listen((_) {
-      if (mounted) setState(() => _playingId = null);
+
+    File file = await LocalCache.audioFile(msg.id);
+    if (!await file.exists()) {
+      final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
+      await LocalCache.putAudio(msg.id, bytes);
+      file = await LocalCache.audioFile(msg.id);
+    }
+
+    setState(() {
+      _playingId = msg.id;
+      _playProgress = 0;
     });
+    await _player.play(DeviceFileSource(file.path));
   }
 
   Future<void> _confirmDelete(VoiceMessage msg) async {
@@ -220,6 +284,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await ref.read(apiProvider).deleteMessage(msg.id);
       if (!mounted) return;
       setState(() => _messages = _messages.where((m) => m.id != msg.id).toList());
+      await LocalCache.saveMessages(widget.conversationId, _messages);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     }
@@ -299,60 +364,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           return Align(
                             alignment:
                                 mine ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 6),
-                              constraints: BoxConstraints(
-                                maxWidth: MediaQuery.sizeOf(context).width * 0.82,
-                              ),
-                              child: SoftCard(
-                                onTap: () => _play(m),
-                                onLongPress: mine ? () => _confirmDelete(m) : null,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (m.unread && !mine)
-                                      Container(
-                                        width: 10,
-                                        height: 10,
-                                        margin: const EdgeInsets.only(right: 8),
-                                        decoration: BoxDecoration(
-                                          color: t.colorScheme.primary,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    Icon(
-                                      _playingId == m.id
-                                          ? Icons.stop_circle
-                                          : Icons.play_circle_fill,
-                                      size: 40,
-                                      color: t.colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Flexible(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            mine ? 'Te' : m.senderName,
-                                            style: t.textTheme.titleLarge?.copyWith(
-                                              fontSize: 16,
-                                              fontWeight: m.unread && !mine
-                                                  ? FontWeight.w800
-                                                  : FontWeight.w700,
-                                            ),
-                                          ),
-                                          Text(
-                                            '${(m.durationMs / 1000).ceil()} mp hangüzenet',
-                                            style: t.textTheme.bodyMedium?.copyWith(
-                                              fontWeight: m.unread && !mine
-                                                  ? FontWeight.w700
-                                                  : FontWeight.w500,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+                                  minWidth: 180,
+                                ),
+                                child: VoiceWaveBubble(
+                                  mine: mine,
+                                  senderLabel: mine ? 'Te' : m.senderName,
+                                  durationMs: m.durationMs,
+                                  messageId: m.id,
+                                  playing: _playingId == m.id,
+                                  progress: _playingId == m.id ? _playProgress : 0,
+                                  unread: m.unread && !mine,
+                                  onTap: () => _play(m),
+                                  onLongPress: mine ? () => _confirmDelete(m) : null,
                                 ),
                               ),
                             ),

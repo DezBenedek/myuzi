@@ -91,6 +91,17 @@ button.ghost { background: transparent; color: var(--brand); border: 1px solid v
   cursor: pointer;
 }
 .plan-pick input { width: auto; margin-top: 4px; }
+.plan-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 16px;
+  background: #fafdfb;
+}
+.plan-card h3 { margin: 0 0 4px; font-size: 1.35rem; }
+.plan-card .price { font-size: 1.1rem; font-weight: 700; color: var(--brand); margin: 0 0 12px; }
+.plan-card ul { margin: 0 0 14px; padding-left: 1.1rem; color: var(--muted); }
+.plan-card li { margin: 6px 0; }
+.plan-current { margin: 0 0 4px; font-size: 1.2rem; font-weight: 750; }
 .footer { margin-top: 28px; color: var(--muted); font-size: 0.9rem; }
 @media (max-width: 520px) {
   .wrap { padding: 18px 14px 48px; }
@@ -241,12 +252,16 @@ export function accountPage(opts: {
   const isOwner = family?.owner_id === user.id;
   const currentPlan =
     family?.plan === "family_plus"
-      ? "Család+"
+      ? "Family+"
       : family?.plan === "family"
-        ? "Család"
-        : "Ingyenes";
-  const maxShown =
-    family?.plan === "family_plus" ? 25 : family?.plan === "family" ? 6 : 3;
+        ? "Family"
+        : "Free";
+  const planLimits =
+    family?.plan === "family_plus"
+      ? "max 25 tag · 20 perc hangüzenet · hang- és videóhívás · csoport"
+      : family?.plan === "family"
+        ? "max 6 tag · 10 perc hangüzenet · hang- és videóhívás · csoport"
+        : "max 3 tag · 2 perc hangüzenet · nincs hívás · nincs csoport";
 
   const familyBlock = !family
     ? `
@@ -261,14 +276,7 @@ export function accountPage(opts: {
     : `
       <div class="panel">
         <h2>${escape(family.name)}</h2>
-        <p><span class="pill">${currentPlan}</span> · max ${maxShown} fő · ${members.length} tag</p>
-        <p class="hint">${
-          family.plan === "family_plus"
-            ? "20 perc hangüzenet · hívás · csoport"
-            : family.plan === "family"
-              ? "10 perc hangüzenet · hívás · csoport"
-              : "2 perc hangüzenet · nincs hívás / csoport"
-        }</p>
+        <p><span class="pill">${members.length} tag</span></p>
         <ul class="list">
           ${members
             .map((m) => {
@@ -306,30 +314,16 @@ export function accountPage(opts: {
       ${
         isOwner
           ? `<div class="panel">
-        <h2>Csomagok</h2>
-        <table class="compare">
-          <thead>
-            <tr><th></th><th>Ingyenes</th><th>Család</th><th>Család+</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Ár</td><td>0 Ft</td><td>1990 Ft/hó</td><td>4990 Ft/hó</td></tr>
-            <tr><td>Tagok</td><td>3</td><td>6</td><td>25</td></tr>
-            <tr><td>Hangüzenet</td><td>2 perc</td><td>10 perc</td><td>20 perc</td></tr>
-            <tr><td>Hívás</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-            <tr><td>Csoport</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          </tbody>
-        </table>
-        <div class="plan-pick">
-          <form method="GET" action="/account/billing">
-            <input type="hidden" name="plan" value="family" />
-            <button type="submit" class="${family.plan === "family" ? "" : "secondary"}">Család — 1990 Ft/hó</button>
-          </form>
-          <form method="GET" action="/account/billing">
-            <input type="hidden" name="plan" value="family_plus" />
-            <button type="submit" class="${family.plan === "family_plus" ? "" : "secondary"}">Család+ — 4990 Ft/hó</button>
-          </form>
-        </div>
-        <form method="POST" action="/account/portal"><button class="ghost" type="submit">Stripe portál</button></form>
+        <p class="plan-current">Jelenlegi csomagod: ${currentPlan}</p>
+        <p class="hint">${planLimits}</p>
+        <form method="GET" action="/account/plans" style="margin-top:14px">
+          <button type="submit">Előfizetés</button>
+        </form>
+        ${
+          family.plan === "family" || family.plan === "family_plus"
+            ? `<form method="POST" action="/account/portal"><button class="ghost" type="submit">Stripe portál</button></form>`
+            : ""
+        }
       </div>`
           : ""
       }`;
@@ -357,6 +351,61 @@ export function accountPage(opts: {
   );
 }
 
+export function plansPage(opts: {
+  user: UserRow;
+  currentPlan: string;
+}): string {
+  const { user, currentPlan } = opts;
+  const familyActive = currentPlan === "family";
+  const plusActive = currentPlan === "family_plus";
+
+  return layout(
+    "Előfizetés",
+    `
+    <h1 class="brand">MyÜzi</h1>
+    <p class="sub">Válassz csomagot</p>
+    <div class="panel" style="display:grid;gap:14px">
+      <div class="plan-card">
+        <h3>Family</h3>
+        <p class="price">1990 Ft/hó</p>
+        <ul>
+          <li>6 tag</li>
+          <li>10 perc hangüzenet</li>
+          <li>Hang- és videóhívás</li>
+          <li>Csoportok</li>
+        </ul>
+        <form method="GET" action="/account/billing">
+          <input type="hidden" name="plan" value="family" />
+          <button type="submit"${familyActive ? " class=\"secondary\"" : ""}>${
+            familyActive ? "Jelenlegi csomag" : "Ezt választom"
+          }</button>
+        </form>
+      </div>
+      <div class="plan-card">
+        <h3>Family+</h3>
+        <p class="price">4990 Ft/hó</p>
+        <ul>
+          <li>25 tag</li>
+          <li>20 perc hangüzenet</li>
+          <li>Hang- és videóhívás</li>
+          <li>Csoportok</li>
+        </ul>
+        <form method="GET" action="/account/billing">
+          <input type="hidden" name="plan" value="family_plus" />
+          <button type="submit"${plusActive ? " class=\"secondary\"" : ""}>${
+            plusActive ? "Jelenlegi csomag" : "Ezt választom"
+          }</button>
+        </form>
+      </div>
+      <form method="GET" action="/account">
+        <button class="ghost" type="submit">Vissza</button>
+      </form>
+    </div>
+  `,
+    !!user.vision_assist,
+  );
+}
+
 export function billingPage(opts: {
   user: UserRow;
   plan: "family" | "family_plus";
@@ -373,7 +422,7 @@ export function billingPage(opts: {
 }): string {
   const { user, plan, billing, error } = opts;
   const isCompany = billing?.billing_type === "company";
-  const planName = plan === "family_plus" ? "Család+" : "Család";
+  const planName = plan === "family_plus" ? "Family+" : "Family";
   const price = plan === "family_plus" ? "4990" : "1990";
   const savedName = billing?.billing_name ?? "";
   const savedTax = billing?.billing_tax_id ?? "";
@@ -417,7 +466,7 @@ export function billingPage(opts: {
         <input type="hidden" name="country" value="${escape(billing?.billing_country || "HU")}" />
         <button type="submit">Fizetés</button>
       </form>
-      <form method="GET" action="/account" style="margin-top:8px">
+      <form method="GET" action="/account/plans" style="margin-top:8px">
         <button class="ghost" type="submit">Vissza</button>
       </form>
     </div>

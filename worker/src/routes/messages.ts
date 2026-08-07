@@ -103,7 +103,7 @@ messages.get("/:conversationId", async (c) => {
   }
 
   const before = c.req.query("before");
-  const limit = Math.min(Number(c.req.query("limit") ?? 40), 100);
+  const limit = Math.min(Number(c.req.query("limit") ?? 50), 100);
   const lastReadAt = await getLastReadAt(c.env.DB, conversationId, userId);
 
   let sql = `SELECT vm.*, u.name AS sender_name
