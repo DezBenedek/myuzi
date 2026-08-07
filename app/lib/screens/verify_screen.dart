@@ -1,0 +1,94 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../providers/providers.dart';
+import '../services/api_client.dart';
+import '../widgets/widgets.dart';
+
+class VerifyScreen extends ConsumerStatefulWidget {
+  const VerifyScreen({super.key});
+
+  @override
+  ConsumerState<VerifyScreen> createState() => _VerifyScreenState();
+}
+
+class _VerifyScreenState extends ConsumerState<VerifyScreen> {
+  final _code = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ref.read(authProvider.notifier).verify(_code.text.trim());
+      if (mounted) context.go('/');
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } catch (_) {
+      setState(() => _error = 'Sikertelen belépés');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = ref.watch(authProvider);
+    final t = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go('/login'),
+        ),
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(22, 12, 22, 24),
+          children: [
+            Text('Írd be a kódot', style: t.textTheme.displayLarge?.copyWith(fontSize: 34)),
+            const SizedBox(height: 8),
+            Text(
+              'Elküldtük ide: ${auth.pendingEmail ?? ''}',
+              style: t.textTheme.bodyLarge,
+            ),
+            const SizedBox(height: 28),
+            TextField(
+              controller: _code,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: t.textTheme.displayLarge?.copyWith(letterSpacing: 10, fontSize: 36),
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(6),
+              ],
+              decoration: const InputDecoration(hintText: '••••••'),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: TextStyle(color: t.colorScheme.error, fontWeight: FontWeight.w700)),
+            ],
+            const SizedBox(height: 24),
+            BigButton(
+              label: _busy ? 'Ellenőrzés…' : 'Belépek',
+              icon: Icons.check_circle_outline,
+              onPressed: _busy ? null : _submit,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

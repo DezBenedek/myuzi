@@ -1,0 +1,26 @@
+{
+  "name": "myuzi-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply myuzi --local",
+    "db:migrate": "wrangler d1 migrations apply myuzi --remote",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.7.0",
+    "jose": "^6.0.0",
+    "livekit-server-sdk": "^2.10.0",
+    "stripe": "^17.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250317.0",
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2",
+    "wrangler": "^4.0.0"
+  }
+}

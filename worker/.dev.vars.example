@@ -1,0 +1,9 @@
+# Másold .dev.vars névre, majd töltsd ki.
+# Élesben: wrangler secret put <NÉV>
+#
+# SESSION_SECRET
+# LIVEKIT_API_KEY
+# LIVEKIT_API_SECRET
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+# FCM_SERVER_KEY (opcionális)
