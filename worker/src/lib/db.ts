@@ -69,6 +69,7 @@ export function publicUser(u: UserRow) {
     email: u.email,
     name: u.name,
     visionAssist: !!u.vision_assist,
+    avatarUrl: u.avatar_key ? `/api/users/${u.id}/avatar` : null,
   };
 }
 

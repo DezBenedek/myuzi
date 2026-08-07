@@ -4,25 +4,35 @@ class User {
     required this.email,
     required this.name,
     required this.visionAssist,
+    this.avatarUrl,
   });
 
   final String id;
   final String email;
   final String name;
   final bool visionAssist;
+  final String? avatarUrl;
 
   factory User.fromJson(Map<String, dynamic> j) => User(
         id: j['id'] as String,
         email: j['email'] as String,
         name: j['name'] as String,
         visionAssist: j['visionAssist'] as bool? ?? false,
+        avatarUrl: j['avatarUrl'] as String?,
       );
 
-  User copyWith({String? name, bool? visionAssist}) => User(
+  User copyWith({
+    String? name,
+    bool? visionAssist,
+    String? avatarUrl,
+    bool clearAvatar = false,
+  }) =>
+      User(
         id: id,
         email: email,
         name: name ?? this.name,
         visionAssist: visionAssist ?? this.visionAssist,
+        avatarUrl: clearAvatar ? null : (avatarUrl ?? this.avatarUrl),
       );
 }
 
@@ -63,7 +73,6 @@ class Family {
     return 'Ingyenes · max $maxMembers fő · 2 perc hang · nincs hívás';
   }
 
-  /// Ingyenes: 2 · Család: 10 · Család+: 20 perc
   int get voiceMaxMs {
     if (plan == 'family_plus') return 20 * 60 * 1000;
     if (plan == 'family') return 10 * 60 * 1000;
@@ -87,18 +96,21 @@ class FamilyMember {
     required this.name,
     required this.email,
     required this.role,
+    this.avatarUrl,
   });
 
   final String id;
   final String name;
   final String email;
   final String role;
+  final String? avatarUrl;
 
   factory FamilyMember.fromJson(Map<String, dynamic> j) => FamilyMember(
         id: j['id'] as String,
         name: j['name'] as String,
-        email: j['email'] as String,
+        email: j['email'] as String? ?? '',
         role: j['role'] as String? ?? 'member',
+        avatarUrl: j['avatarUrl'] as String?,
       );
 }
 
@@ -110,6 +122,8 @@ class ConversationSummary {
     required this.memberCount,
     this.lastMessageAt,
     this.lastSenderName,
+    this.avatarUrl,
+    this.pinned = false,
     required this.members,
     this.unreadCount = 0,
   });
@@ -120,8 +134,12 @@ class ConversationSummary {
   final int memberCount;
   final String? lastMessageAt;
   final String? lastSenderName;
+  final String? avatarUrl;
+  final bool pinned;
   final List<FamilyMember> members;
   final int unreadCount;
+
+  bool get isGroup => type == 'group';
 
   factory ConversationSummary.fromJson(Map<String, dynamic> j) =>
       ConversationSummary(
@@ -131,13 +149,36 @@ class ConversationSummary {
         memberCount: j['memberCount'] as int? ?? 0,
         lastMessageAt: j['lastMessageAt'] as String?,
         lastSenderName: j['lastSenderName'] as String?,
+        avatarUrl: j['avatarUrl'] as String?,
+        pinned: j['pinned'] == true,
         unreadCount: j['unreadCount'] as int? ?? 0,
         members: ((j['members'] as List?) ?? [])
             .map((e) => FamilyMember.fromJson({
                   ...Map<String, dynamic>.from(e as Map),
-                  'role': 'member',
+                  'role': (e as Map)['role'] ?? 'member',
                 }))
             .toList(),
+      );
+}
+
+class MemberRead {
+  MemberRead({
+    required this.userId,
+    required this.name,
+    this.avatarUrl,
+    this.lastReadAt,
+  });
+
+  final String userId;
+  final String name;
+  final String? avatarUrl;
+  final String? lastReadAt;
+
+  factory MemberRead.fromJson(Map<String, dynamic> j) => MemberRead(
+        userId: j['userId'] as String,
+        name: j['name'] as String? ?? '',
+        avatarUrl: j['avatarUrl'] as String?,
+        lastReadAt: j['lastReadAt'] as String?,
       );
 }
 
@@ -151,6 +192,7 @@ class VoiceMessage {
     required this.createdAt,
     required this.url,
     this.unread = false,
+    this.waveBars = const [],
   });
 
   final String id;
@@ -161,17 +203,30 @@ class VoiceMessage {
   final String createdAt;
   final String url;
   final bool unread;
+  /// Bar heights 1–20 (empty = generate fallback from id).
+  final List<int> waveBars;
 
-  factory VoiceMessage.fromJson(Map<String, dynamic> j) => VoiceMessage(
-        id: j['id'] as String,
-        conversationId: j['conversationId'] as String,
-        senderId: j['senderId'] as String,
-        senderName: j['senderName'] as String? ?? '',
-        durationMs: j['durationMs'] as int? ?? 0,
-        createdAt: j['createdAt'] as String? ?? '',
-        url: j['url'] as String,
-        unread: j['unread'] as bool? ?? false,
-      );
+  factory VoiceMessage.fromJson(Map<String, dynamic> j) {
+    final raw = j['waveBars'];
+    List<int> bars = const [];
+    if (raw is List) {
+      bars = raw
+          .map((e) => (e is num ? e.toInt() : int.tryParse('$e') ?? 1))
+          .map((n) => n.clamp(1, 20))
+          .toList();
+    }
+    return VoiceMessage(
+      id: j['id'] as String,
+      conversationId: j['conversationId'] as String,
+      senderId: j['senderId'] as String,
+      senderName: j['senderName'] as String? ?? '',
+      durationMs: j['durationMs'] as int? ?? 0,
+      createdAt: j['createdAt'] as String? ?? '',
+      url: j['url'] as String,
+      unread: j['unread'] as bool? ?? false,
+      waveBars: bars,
+    );
+  }
 }
 
 class CallSession {

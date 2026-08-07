@@ -5,6 +5,7 @@ import 'providers/providers.dart';
 import 'router.dart';
 import 'services/app_notify.dart';
 import 'theme/app_theme.dart';
+import 'widgets/offline_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,7 +33,12 @@ class MyUziApp extends ConsumerWidget {
           data: media.copyWith(
             textScaler: TextScaler.linear(vision ? 1.2 : 1.0),
           ),
-          child: child ?? const SizedBox.shrink(),
+          child: Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              const OfflineBanner(),
+            ],
+          ),
         );
       },
     );

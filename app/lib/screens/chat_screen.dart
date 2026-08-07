@@ -9,9 +9,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../models/models.dart';
+import '../providers/connectivity_provider.dart';
 import '../providers/providers.dart';
 import '../services/api_client.dart';
 import '../services/local_cache.dart';
+import '../services/toast.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/voice_wave_bubble.dart';
 import '../widgets/widgets.dart';
 
@@ -29,13 +32,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _player = AudioPlayer();
   final _scroll = ScrollController();
   List<VoiceMessage> _messages = [];
+  List<MemberRead> _memberReads = [];
   bool _loading = true;
   bool _recording = false;
   DateTime? _recordStarted;
   Duration _recordElapsed = Duration.zero;
   String? _playingId;
   double _playProgress = 0;
-  String? _error;
+  int _playingDurationMs = 0;
   String _title = 'Beszélgetés';
   Timer? _refresh;
   Timer? _recordTick;
@@ -57,14 +61,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         setState(() {
           _playingId = null;
           _playProgress = 0;
+          _playingDurationMs = 0;
         });
       }
     });
-    _posSub = _player.onPositionChanged.listen((pos) async {
+    _posSub = _player.onPositionChanged.listen((pos) {
       if (!mounted || _playingId == null) return;
-      final dur = await _player.getDuration();
-      if (dur == null || dur.inMilliseconds <= 0) return;
-      setState(() => _playProgress = pos.inMilliseconds / dur.inMilliseconds);
+      final total = _playingDurationMs;
+      if (total <= 0) return;
+      final next = (pos.inMilliseconds / total).clamp(0.0, 1.0);
+      // Avoid rebuild spam — only update when progress moves ~1%.
+      if ((next - _playProgress).abs() < 0.01 && next < 0.99) return;
+      setState(() => _playProgress = next);
     });
     _boot();
     _refresh = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true));
@@ -122,31 +130,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     try {
       final api = ref.read(apiProvider);
-      final messages = await api.listMessages(widget.conversationId, limit: 50);
-      await LocalCache.saveMessages(widget.conversationId, messages);
-      unawaited(LocalCache.prefetchAudio(api, messages, keep: 8));
+      final page = await api.listMessages(widget.conversationId, limit: 50);
+      await LocalCache.saveMessages(widget.conversationId, page.messages);
+      unawaited(LocalCache.prefetchAudio(api, page.messages, keep: 8));
 
       final home = ref.read(homeNotifierProvider).asData?.value;
       final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
 
       if (mounted) {
         setState(() {
-          _messages = messages;
+          _messages = page.messages;
+          _memberReads = page.memberReads;
           if (conv != null) _title = conv.name;
           _loading = false;
-          _error = null;
         });
         if (!silent) _scrollToBottom();
         unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       }
     } on ApiException catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.message;
-          _loading = false;
-        });
-      }
+      if (mounted && !silent) showAppToast(context, e.message, error: true);
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Readers whose read cursor sits on this message (Messenger-style).
+  List<MemberRead> _readersAt(int index, String meId) {
+    final msg = _messages[index];
+    final nextCreated =
+        index + 1 < _messages.length ? _messages[index + 1].createdAt : null;
+    return _memberReads.where((r) {
+      if (r.userId == meId) return false;
+      final at = r.lastReadAt;
+      if (at == null || at.isEmpty) return false;
+      if (at.compareTo(msg.createdAt) < 0) return false;
+      if (nextCreated != null && at.compareTo(nextCreated) >= 0) return false;
+      return true;
+    }).toList();
   }
 
   String _fmt(Duration d) {
@@ -156,9 +175,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _startRecording() async {
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
     final ok = await _recorder.hasPermission();
     if (!ok) {
-      setState(() => _error = 'Mikrofon engedély kell');
+      showAppToast(context, 'Mikrofon engedély kell', error: true);
       return;
     }
     final dir = await getTemporaryDirectory();
@@ -173,7 +196,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _recording = true;
       _recordStarted = DateTime.now();
       _recordElapsed = Duration.zero;
-      _error = null;
     });
     _recordTick = Timer.periodic(const Duration(seconds: 1), (_) {
       final started = _recordStarted;
@@ -204,12 +226,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     var duration = DateTime.now().difference(started).inMilliseconds;
     if (duration > maxMs) duration = maxMs;
     final bytes = await File(path).readAsBytes();
+    final waveBars = VoiceWaveBubble.generateBars();
     try {
       final msg = await ref.read(apiProvider).uploadVoice(
             conversationId: widget.conversationId,
             bytes: bytes,
             contentType: 'audio/m4a',
             durationMs: duration,
+            waveBars: waveBars,
           );
       final me = ref.read(authProvider).user!;
       final local = VoiceMessage(
@@ -220,6 +244,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         durationMs: duration,
         createdAt: DateTime.now().toIso8601String(),
         url: msg.url,
+        waveBars: msg.waveBars.isNotEmpty ? msg.waveBars : waveBars,
       );
       await LocalCache.putAudio(msg.id, bytes);
       if (mounted) {
@@ -229,7 +254,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       unawaited(_load(silent: true));
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) showAppToast(context, e.message, error: true);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -249,35 +274,111 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       setState(() {
         _playingId = null;
         _playProgress = 0;
+        _playingDurationMs = 0;
       });
       return;
     }
 
-    File file = await LocalCache.audioFile(msg.id);
-    if (!await file.exists()) {
-      final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
-      await LocalCache.putAudio(msg.id, bytes);
-      file = await LocalCache.audioFile(msg.id);
-    }
+    try {
+      File file = await LocalCache.audioFile(msg.id);
+      if (!await file.exists()) {
+        if (!ref.read(connectivityProvider)) {
+          showAppToast(context, 'Nincs internet', error: true);
+          return;
+        }
+        final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
+        await LocalCache.putAudio(msg.id, bytes);
+        file = await LocalCache.audioFile(msg.id);
+      }
 
-    setState(() {
-      _playingId = msg.id;
-      _playProgress = 0;
-    });
-    await _player.play(DeviceFileSource(file.path));
+      final durationMs = msg.durationMs > 0 ? msg.durationMs : 1;
+      setState(() {
+        _playingId = msg.id;
+        _playProgress = 0;
+        _playingDurationMs = durationMs;
+      });
+      await _player.play(DeviceFileSource(file.path));
+    } on ApiException catch (e) {
+      if (mounted) showAppToast(context, e.message, error: true);
+    }
+  }
+
+  Future<void> _messageActions(VoiceMessage msg, {required bool mine}) async {
+    final playing = _playingId == msg.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                  title: Text(playing ? 'Szüneteltetés' : 'Lejátszás'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _play(msg);
+                  },
+                ),
+                if (mine)
+                  ListTile(
+                    leading: Icon(Icons.delete_outline, color: t.colorScheme.error),
+                    title: Text('Törlés', style: TextStyle(color: t.colorScheme.error)),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _confirmDelete(msg);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _confirmDelete(VoiceMessage msg) async {
-    final ok = await showDialog<bool>(
+    final ok = await showModalBottomSheet<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Üzenet törlése'),
-        content: const Text('Biztosan törlöd ezt a hangüzenetet?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Mégse')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Törlés')),
-        ],
-      ),
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Üzenet törlése', style: t.textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(
+                  'Biztosan törlöd ezt a hangüzenetet?',
+                  style: t.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: 'Törlés',
+                  icon: Icons.delete_outline,
+                  danger: true,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  icon: Icons.close,
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
     if (ok != true) return;
     try {
@@ -286,11 +387,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       setState(() => _messages = _messages.where((m) => m.id != msg.id).toList());
       await LocalCache.saveMessages(widget.conversationId, _messages);
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) showAppToast(context, e.message, error: true);
     }
   }
 
   Future<void> _call(String type) async {
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
     try {
       final session = await ref.read(apiProvider).startCall(
             conversationId: widget.conversationId,
@@ -305,7 +410,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       });
     } on ApiException catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.message);
+      showAppToast(context, e.message, error: true);
     }
   }
 
@@ -335,14 +440,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       body: Column(
         children: [
-          if (_error != null)
-            Material(
-              color: const Color(0xFFFFE8E6),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(_error!, style: TextStyle(color: t.colorScheme.error)),
-              ),
-            ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -361,6 +458,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemBuilder: (context, i) {
                           final m = _messages[i];
                           final mine = m.senderId == me;
+                          final readers = _readersAt(i, me);
                           return Align(
                             alignment:
                                 mine ? Alignment.centerRight : Alignment.centerLeft,
@@ -371,16 +469,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   maxWidth: MediaQuery.sizeOf(context).width * 0.78,
                                   minWidth: 180,
                                 ),
-                                child: VoiceWaveBubble(
-                                  mine: mine,
-                                  senderLabel: mine ? 'Te' : m.senderName,
-                                  durationMs: m.durationMs,
-                                  messageId: m.id,
-                                  playing: _playingId == m.id,
-                                  progress: _playingId == m.id ? _playProgress : 0,
-                                  unread: m.unread && !mine,
-                                  onTap: () => _play(m),
-                                  onLongPress: mine ? () => _confirmDelete(m) : null,
+                                child: Column(
+                                  crossAxisAlignment: mine
+                                      ? CrossAxisAlignment.end
+                                      : CrossAxisAlignment.start,
+                                  children: [
+                                    VoiceWaveBubble(
+                                      mine: mine,
+                                      senderLabel: mine ? 'Te' : m.senderName,
+                                      durationMs: m.durationMs,
+                                      messageId: m.id,
+                                      waveBars: m.waveBars,
+                                      playing: _playingId == m.id,
+                                      progress:
+                                          _playingId == m.id ? _playProgress : 0,
+                                      unread: m.unread && !mine,
+                                      onTap: () => _play(m),
+                                      onLongPress: () =>
+                                          _messageActions(m, mine: mine),
+                                    ),
+                                    if (readers.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      Padding(
+                                        padding: EdgeInsets.only(
+                                          left: mine ? 0 : 6,
+                                          right: mine ? 6 : 0,
+                                        ),
+                                        child: Wrap(
+                                          spacing: 4,
+                                          runSpacing: 4,
+                                          alignment: mine
+                                              ? WrapAlignment.end
+                                              : WrapAlignment.start,
+                                          children: readers
+                                              .map(
+                                                (r) => Tooltip(
+                                                  message: r.name,
+                                                  child: UserAvatar(
+                                                    name: r.name,
+                                                    avatarUrl: r.avatarUrl,
+                                                    userId: r.userId,
+                                                    radius: 10,
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
                             ),

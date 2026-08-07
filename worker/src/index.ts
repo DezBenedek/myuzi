@@ -9,6 +9,7 @@ import devices from "./routes/devices";
 import families from "./routes/families";
 import invites from "./routes/invites";
 import messages from "./routes/messages";
+import users from "./routes/users";
 import web from "./routes/web";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -34,6 +35,7 @@ app.get("/health", (c) =>
 );
 
 app.route("/api/auth", auth);
+app.route("/api/users", users);
 app.route("/api/families", families);
 app.route("/api/invites", invites);
 app.route("/api/conversations", conversations);

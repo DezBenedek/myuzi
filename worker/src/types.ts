@@ -60,6 +60,7 @@ type UserRow = {
   vision_assist: number;
   push_token: string | null;
   push_platform: string | null;
+  avatar_key?: string | null;
   created_at: string;
   updated_at: string;
 };

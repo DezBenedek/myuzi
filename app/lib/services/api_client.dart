@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/models.dart';
+import '../providers/connectivity_provider.dart';
 
 class ApiException implements Exception {
   ApiException(
@@ -68,11 +69,15 @@ class ApiClient {
     required String path,
     Map<String, String>? query,
   }) async {
+    if (!NetStatus.online) {
+      throw ApiException('Nincs internet');
+    }
     final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: query);
     try {
-      return await request(uri).timeout(const Duration(seconds: 20));
+      return await request(uri).timeout(const Duration(seconds: 8));
     } catch (e) {
-      throw ApiException('Nem elérhető a szerver (${AppConfig.primaryBaseUrl}). $e');
+      if (e is ApiException) rethrow;
+      throw ApiException('Nem elérhető a szerver. Ellenőrizd az internetet.');
     }
   }
 
@@ -220,6 +225,61 @@ class ApiClient {
     return Family.fromJson(body['family'] as Map<String, dynamic>);
   }
 
+  Future<Family> renameFamily({
+    required String familyId,
+    required String name,
+  }) async {
+    final res = await _send(
+      (uri) => _client.patch(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'name': name}),
+      ),
+      path: '/api/families/$familyId',
+    );
+    final body = await _json(res);
+    return Family.fromJson(body['family'] as Map<String, dynamic>);
+  }
+
+  Future<User> uploadAvatar({
+    required Uint8List bytes,
+    required String contentType,
+  }) async {
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(
+          json: false,
+          extra: {'Content-Type': contentType},
+        ),
+        body: bytes,
+      ),
+      path: '/api/auth/avatar',
+    );
+    final body = await _json(res);
+    return User.fromJson(body['user'] as Map<String, dynamic>);
+  }
+
+  Future<User> deleteAvatar() async {
+    final res = await _send(
+      (uri) => _client.delete(uri, headers: _headers(json: false)),
+      path: '/api/auth/avatar',
+    );
+    final body = await _json(res);
+    return User.fromJson(body['user'] as Map<String, dynamic>);
+  }
+
+  Future<Uint8List> downloadBytes(String path) async {
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers(json: false)),
+      path: path,
+    );
+    if (res.statusCode >= 400) {
+      throw ApiException('Nem sikerült betölteni', statusCode: res.statusCode);
+    }
+    return res.bodyBytes;
+  }
+
   Future<String> createInvite({String? email}) async {
     final res = await _send(
       (uri) => _client.post(
@@ -317,7 +377,24 @@ class ApiClient {
     return body['conversationId'] as String;
   }
 
-  Future<List<VoiceMessage>> listMessages(
+  Future<void> pinConversation(String conversationId) async {
+    final res = await _send(
+      (uri) => _client.post(uri, headers: _headers()),
+      path: '/api/conversations/$conversationId/pin',
+    );
+    await _json(res);
+  }
+
+  Future<void> unpinConversation(String conversationId) async {
+    final res = await _send(
+      (uri) => _client.delete(uri, headers: _headers(json: false)),
+      path: '/api/conversations/$conversationId/pin',
+    );
+    await _json(res);
+  }
+
+  Future<({List<VoiceMessage> messages, List<MemberRead> memberReads})>
+      listMessages(
     String conversationId, {
     int limit = 50,
     String? before,
@@ -331,9 +408,14 @@ class ApiClient {
       },
     );
     final body = await _json(res);
-    return ((body['messages'] as List?) ?? [])
-        .map((e) => VoiceMessage.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return (
+      messages: ((body['messages'] as List?) ?? [])
+          .map((e) => VoiceMessage.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      memberReads: ((body['memberReads'] as List?) ?? [])
+          .map((e) => MemberRead.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
   }
 
   Future<void> deleteMessage(String messageId) async {
@@ -349,6 +431,7 @@ class ApiClient {
     required Uint8List bytes,
     required String contentType,
     required int durationMs,
+    required List<int> waveBars,
   }) async {
     final res = await _send(
       (uri) => _client.post(
@@ -358,6 +441,7 @@ class ApiClient {
           extra: {
             'Content-Type': contentType,
             'X-Duration-Ms': '$durationMs',
+            'X-Wave-Bars': jsonEncode(waveBars),
           },
         ),
         body: bytes,
@@ -373,16 +457,7 @@ class ApiClient {
     });
   }
 
-  Future<Uint8List> downloadAudio(String path) async {
-    final res = await _send(
-      (uri) => _client.get(uri, headers: _headers(json: false)),
-      path: path,
-    );
-    if (res.statusCode >= 400) {
-      throw ApiException('Nem sikerült lejátszani', statusCode: res.statusCode);
-    }
-    return res.bodyBytes;
-  }
+  Future<Uint8List> downloadAudio(String path) => downloadBytes(path);
 
   Future<CallSession> startCall({
     String? conversationId,

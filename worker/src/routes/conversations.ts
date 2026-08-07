@@ -20,18 +20,26 @@ conversations.use("*", requireAuth);
 async function familyPeople(
   db: D1Database,
   userId: string,
-): Promise<Array<{ id: string; name: string; email: string; role: string }>> {
+): Promise<
+  Array<{ id: string; name: string; email: string; role: string; avatarUrl: string | null }>
+> {
   const family = await getUserFamily(db, userId);
   if (!family) return [];
   const members = await db
     .prepare(
-      `SELECT u.id, u.name, u.email, fm.role
+      `SELECT u.id, u.name, u.email, u.avatar_key, fm.role
        FROM family_members fm JOIN users u ON u.id = fm.user_id
        WHERE fm.family_id = ? ORDER BY u.name`,
     )
     .bind(family.id)
-    .all<{ id: string; name: string; email: string; role: string }>();
-  return members.results ?? [];
+    .all<{ id: string; name: string; email: string; avatar_key: string | null; role: string }>();
+  return (members.results ?? []).map((m) => ({
+    id: m.id,
+    name: m.name,
+    email: m.email,
+    role: m.role,
+    avatarUrl: m.avatar_key ? `/api/users/${m.id}/avatar` : null,
+  }));
 }
 
 async function openOrCreateDirect(
@@ -79,6 +87,7 @@ conversations.get("/", async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT c.*,
       cm.last_read_at AS last_read_at,
+      cm.pinned_at AS pinned_at,
       (SELECT COUNT(*) FROM conversation_members x WHERE x.conversation_id = c.id) AS member_count,
       (SELECT vm.created_at FROM voice_messages vm
          WHERE vm.conversation_id = c.id ORDER BY vm.created_at DESC LIMIT 1) AS last_message_at,
@@ -93,7 +102,10 @@ conversations.get("/", async (c) => {
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
      WHERE c.family_id = ?
-     ORDER BY COALESCE(last_message_at, c.created_at) DESC`,
+     ORDER BY
+       CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,
+       COALESCE(cm.pinned_at, '') DESC,
+       COALESCE(last_message_at, c.created_at) DESC`,
   )
     .bind(userId, userId, family.id)
     .all<{
@@ -105,6 +117,7 @@ conversations.get("/", async (c) => {
       created_at: string;
       updated_at: string;
       last_read_at: string | null;
+      pinned_at: string | null;
       member_count: number;
       last_message_at: string | null;
       last_sender_name: string | null;
@@ -114,17 +127,19 @@ conversations.get("/", async (c) => {
   const list = [];
   for (const row of rows.results ?? []) {
     const members = await c.env.DB.prepare(
-      `SELECT u.id, u.name, u.email
+      `SELECT u.id, u.name, u.email, u.avatar_key
        FROM conversation_members cm JOIN users u ON u.id = cm.user_id
        WHERE cm.conversation_id = ?`,
     )
       .bind(row.id)
-      .all<{ id: string; name: string; email: string }>();
+      .all<{ id: string; name: string; email: string; avatar_key: string | null }>();
 
     let title = row.name;
+    let avatarUrl: string | null = null;
     if (row.type === "direct") {
       const other = (members.results ?? []).find((m) => m.id !== userId);
       title = other?.name ?? "Beszélgetés";
+      avatarUrl = other?.avatar_key ? `/api/users/${other.id}/avatar` : null;
     }
 
     list.push({
@@ -135,7 +150,15 @@ conversations.get("/", async (c) => {
       lastMessageAt: row.last_message_at,
       lastSenderName: row.last_sender_name,
       unreadCount: row.unread_count ?? 0,
-      members: members.results ?? [],
+      pinned: !!row.pinned_at,
+      pinnedAt: row.pinned_at,
+      avatarUrl,
+      members: (members.results ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        avatarUrl: m.avatar_key ? `/api/users/${m.id}/avatar` : null,
+      })),
     });
   }
 
@@ -301,6 +324,36 @@ conversations.get("/:id", async (c) => {
     .all();
 
   return c.json({ conversation: row, members: members.results ?? [] });
+});
+
+conversations.post("/:id/pin", async (c) => {
+  const conversationId = c.req.param("id");
+  const userId = c.get("userId");
+  if (!(await isConversationMember(c.env.DB, conversationId, userId))) {
+    return c.json({ error: "Nincs hozzáférés" }, 403);
+  }
+  await c.env.DB.prepare(
+    `UPDATE conversation_members SET pinned_at = datetime('now')
+     WHERE conversation_id = ? AND user_id = ?`,
+  )
+    .bind(conversationId, userId)
+    .run();
+  return c.json({ ok: true, pinned: true });
+});
+
+conversations.delete("/:id/pin", async (c) => {
+  const conversationId = c.req.param("id");
+  const userId = c.get("userId");
+  if (!(await isConversationMember(c.env.DB, conversationId, userId))) {
+    return c.json({ error: "Nincs hozzáférés" }, 403);
+  }
+  await c.env.DB.prepare(
+    `UPDATE conversation_members SET pinned_at = NULL
+     WHERE conversation_id = ? AND user_id = ?`,
+  )
+    .bind(conversationId, userId)
+    .run();
+  return c.json({ ok: true, pinned: false });
 });
 
 export default conversations;

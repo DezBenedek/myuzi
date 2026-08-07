@@ -12,7 +12,7 @@ import {
   sixDigitCode,
   timingSafeEqual,
 } from "../lib/crypto";
-import { getUserByEmail, publicUser } from "../lib/db";
+import { getUserByEmail, getUserById, publicUser } from "../lib/db";
 import { loginCodeEmail, sendEmail } from "../lib/email";
 import { publicBaseUrl } from "../lib/urls";
 import { requireAuth } from "../middleware/auth";
@@ -211,7 +211,54 @@ auth.patch("/me", requireAuth, async (c) => {
     .bind(name, email, vision, user.id)
     .run();
 
-  const updated = await getUserByEmail(c.env.DB, email);
+  const updated = await getUserById(c.env.DB, user.id);
+  return c.json({ user: publicUser(updated!) });
+});
+
+const AVATAR_MAX = 3 * 1024 * 1024;
+
+auth.post("/avatar", requireAuth, async (c) => {
+  const contentType = c.req.header("Content-Type") ?? "image/jpeg";
+  if (!contentType.startsWith("image/")) {
+    return c.json({ error: "Csak képfájl lehet" }, 400);
+  }
+  const body = await c.req.arrayBuffer();
+  if (body.byteLength === 0 || body.byteLength > AVATAR_MAX) {
+    return c.json({ error: "Érvénytelen kép (max 3 MB)" }, 400);
+  }
+
+  const userId = c.get("userId");
+  const key = `avatars/${userId}`;
+  const existing = c.get("user").avatar_key;
+  if (existing && existing !== key) {
+    await c.env.VOICE.delete(existing);
+  }
+
+  await c.env.VOICE.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: { userId },
+  });
+  await c.env.DB.prepare(
+    `UPDATE users SET avatar_key = ?, updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(key, userId)
+    .run();
+
+  const updated = await getUserById(c.env.DB, userId);
+  return c.json({ user: publicUser(updated!) });
+});
+
+auth.delete("/avatar", requireAuth, async (c) => {
+  const user = c.get("user");
+  if (user.avatar_key) {
+    await c.env.VOICE.delete(user.avatar_key);
+  }
+  await c.env.DB.prepare(
+    `UPDATE users SET avatar_key = NULL, updated_at = datetime('now') WHERE id = ?`,
+  )
+    .bind(user.id)
+    .run();
+  const updated = await getUserById(c.env.DB, user.id);
   return c.json({ user: publicUser(updated!) });
 });
 

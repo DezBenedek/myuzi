@@ -8,6 +8,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' show Helper;
 import 'package:livekit_client/livekit_client.dart';
 
 import '../providers/providers.dart';
+import '../services/toast.dart';
 
 class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({
@@ -173,11 +174,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         if (!granted) return;
         final ok = await _enableAndroidScreenShareService();
         if (!ok) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Kijelzőmegosztáshoz engedély kell')),
-            );
-          }
+          if (mounted) showAppToast(context, 'Kijelzőmegosztáshoz engedély kell', error: true);
           return;
         }
       }
@@ -194,9 +191,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     } catch (e) {
       debugPrint('screen share: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kijelzőmegosztás nem elérhető ezen a gépen')),
-        );
+        showAppToast(context, 'Kijelzőmegosztás nem elérhető ezen a gépen', error: true);
       }
     }
   }

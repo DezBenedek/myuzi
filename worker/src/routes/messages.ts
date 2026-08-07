@@ -7,6 +7,32 @@ import { voiceMaxMsForPlan } from "../lib/stripe";
 import { requireAuth } from "../middleware/auth";
 
 const MAX_BYTES = 20 * 1024 * 1024;
+const WAVE_BAR_COUNT = 32;
+
+/** Parse client/server wave bars: ints 1–20, fixed length. */
+function parseWaveBars(raw: string | null | undefined): number[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const bars = parsed
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n))
+      .map((n) => Math.min(20, Math.max(1, n)));
+    if (bars.length < 8) return null;
+    return bars.slice(0, WAVE_BAR_COUNT);
+  } catch {
+    return null;
+  }
+}
+
+function randomWaveBars(): number[] {
+  const bars: number[] = [];
+  for (let i = 0; i < WAVE_BAR_COUNT; i++) {
+    bars.push(1 + Math.floor(Math.random() * 20));
+  }
+  return bars;
+}
 
 const messages = new Hono<{ Bindings: Env; Variables: Variables }>();
 messages.use("*", requireAuth);
@@ -127,12 +153,27 @@ messages.get("/:conversationId", async (c) => {
       sender_name: string;
       r2_key: string;
       duration_ms: number;
+      wave_bars: string | null;
       created_at: string;
     }>();
 
   const cutoff = lastReadAt ?? "1970-01-01T00:00:00.000Z";
 
   await markRead(c.env.DB, conversationId, userId);
+
+  const memberReads = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.avatar_key, cm.last_read_at
+     FROM conversation_members cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.conversation_id = ?`,
+  )
+    .bind(conversationId)
+    .all<{
+      id: string;
+      name: string;
+      avatar_key: string | null;
+      last_read_at: string | null;
+    }>();
 
   return c.json({
     messages: (rows.results ?? []).reverse().map((m) => ({
@@ -141,9 +182,16 @@ messages.get("/:conversationId", async (c) => {
       senderId: m.sender_id,
       senderName: m.sender_name,
       durationMs: m.duration_ms,
+      waveBars: parseWaveBars(m.wave_bars),
       createdAt: m.created_at,
       unread: m.sender_id !== userId && m.created_at > cutoff,
       url: `/api/messages/audio/${m.id}`,
+    })),
+    memberReads: (memberReads.results ?? []).map((m) => ({
+      userId: m.id,
+      name: m.name,
+      avatarUrl: m.avatar_key ? `/api/users/${m.id}/avatar` : null,
+      lastReadAt: m.last_read_at,
     })),
   });
 });
@@ -162,6 +210,9 @@ messages.post("/:conversationId", async (c) => {
   if (!Number.isFinite(durationMs) || durationMs < 0) durationMs = 0;
   if (durationMs > maxDurationMs) durationMs = maxDurationMs;
 
+  const waveBars =
+    parseWaveBars(c.req.header("X-Wave-Bars")) ?? randomWaveBars();
+
   const body = await c.req.arrayBuffer();
   if (body.byteLength === 0 || body.byteLength > MAX_BYTES) {
     return c.json({ error: "Érvénytelen hangfájl" }, 400);
@@ -179,10 +230,17 @@ messages.post("/:conversationId", async (c) => {
   });
 
   await c.env.DB.prepare(
-    `INSERT INTO voice_messages (id, conversation_id, sender_id, r2_key, duration_ms)
-     VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO voice_messages (id, conversation_id, sender_id, r2_key, duration_ms, wave_bars)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   )
-    .bind(messageId, conversationId, c.get("userId"), key, durationMs)
+    .bind(
+      messageId,
+      conversationId,
+      c.get("userId"),
+      key,
+      durationMs,
+      JSON.stringify(waveBars),
+    )
     .run();
 
   await c.env.DB.prepare(
@@ -215,6 +273,7 @@ messages.post("/:conversationId", async (c) => {
         conversationId,
         senderId: c.get("userId"),
         durationMs,
+        waveBars,
         unread: false,
         url: `/api/messages/audio/${messageId}`,
       },

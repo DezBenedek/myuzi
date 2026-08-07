@@ -1,0 +1,119 @@
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../providers/providers.dart';
+import '../services/local_cache.dart';
+
+/// Small authenticated avatar (Bearer-protected R2 image).
+class UserAvatar extends ConsumerStatefulWidget {
+  const UserAvatar({
+    super.key,
+    required this.name,
+    this.avatarUrl,
+    this.userId,
+    this.radius = 22,
+    this.highlight = false,
+  });
+
+  final String name;
+  final String? avatarUrl;
+  final String? userId;
+  final double radius;
+  final bool highlight;
+
+  @override
+  ConsumerState<UserAvatar> createState() => _UserAvatarState();
+}
+
+class _UserAvatarState extends ConsumerState<UserAvatar> {
+  Uint8List? _bytes;
+  String? _loadedFor;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant UserAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.avatarUrl != widget.avatarUrl ||
+        oldWidget.userId != widget.userId) {
+      _load();
+    }
+  }
+
+  String? get _cacheId {
+    if (widget.userId != null && widget.userId!.isNotEmpty) {
+      return widget.userId;
+    }
+    final url = widget.avatarUrl;
+    if (url == null) return null;
+    final parts = url.split('/');
+    final i = parts.indexOf('users');
+    if (i >= 0 && i + 1 < parts.length) return parts[i + 1];
+    return null;
+  }
+
+  Future<void> _load() async {
+    final url = widget.avatarUrl;
+    final cacheId = _cacheId;
+    if (url == null || url.isEmpty || cacheId == null) {
+      if (mounted) {
+        setState(() {
+          _bytes = null;
+          _loadedFor = null;
+        });
+      }
+      return;
+    }
+    if (_loadedFor == url && _bytes != null) return;
+
+    final cached = await LocalCache.loadAvatarBytes(cacheId);
+    if (cached != null && mounted) {
+      setState(() {
+        _bytes = cached;
+        _loadedFor = url;
+      });
+    }
+
+    try {
+      final bytes = await ref.read(apiProvider).downloadBytes(url);
+      await LocalCache.putAvatarBytes(cacheId, bytes);
+      if (mounted) {
+        setState(() {
+          _bytes = bytes;
+          _loadedFor = url;
+        });
+      }
+    } catch (_) {
+      // Keep cached / initials.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    final initial =
+        widget.name.isNotEmpty ? widget.name.characters.first.toUpperCase() : '?';
+    final bg = widget.highlight ? const Color(0xFFB8E6D0) : const Color(0xFFD9F2E6);
+
+    return CircleAvatar(
+      radius: widget.radius,
+      backgroundColor: bg,
+      backgroundImage: _bytes != null ? MemoryImage(_bytes!) : null,
+      child: _bytes == null
+          ? Text(
+              initial,
+              style: t.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                fontSize: widget.radius * 0.85,
+              ),
+            )
+          : null,
+    );
+  }
+}

@@ -96,6 +96,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(user: user);
   }
 
+  Future<void> setAvatar(models.User user) async {
+    state = state.copyWith(user: user);
+  }
+
   Future<void> logout() async {
     await _api.logout();
     state = const AuthState(loading: false);
@@ -112,7 +116,8 @@ typedef HomeData = ({
 });
 
 class HomeNotifier extends StateNotifier<AsyncValue<HomeData>> {
-  HomeNotifier(this._ref) : super(const AsyncLoading()) {
+  HomeNotifier(this._ref)
+      : super(const AsyncData((conversations: [], people: []))) {
     _boot();
   }
 
@@ -124,62 +129,71 @@ class HomeNotifier extends StateNotifier<AsyncValue<HomeData>> {
     if (cached != null) {
       state = AsyncData(cached);
     }
-    await refresh();
+    // Auth may still be loading; refresh when ready.
+    final auth = _ref.read(authProvider);
+    if (auth.isLoggedIn) {
+      await refresh(silent: true);
+    } else if (!auth.loading) {
+      state = const AsyncData((conversations: [], people: []));
+    }
   }
 
-  Future<void> refresh({bool silent = false}) async {
+  /// Push fresh server data into UI + disk cache (no network).
+  void applyData(HomeData data) {
+    state = AsyncData(data);
+    unawaited(
+      LocalCache.saveHome(
+        conversations: data.conversations,
+        people: data.people,
+      ),
+    );
+  }
+
+  Future<void> refresh({bool silent = true}) async {
     if (_busy) return;
     final auth = _ref.read(authProvider);
+    if (auth.loading) return;
     if (!auth.isLoggedIn) {
       state = const AsyncData((conversations: [], people: []));
       return;
     }
     _busy = true;
-    if (!silent && state is! AsyncData) {
+    // Never wipe the list for a spinner if we already have (cached) data.
+    if (!silent && state.asData == null) {
       state = const AsyncLoading();
     }
     try {
       final api = _ref.read(apiProvider);
       final data = await api.listConversations();
-      await LocalCache.saveHome(
-        conversations: data.conversations,
-        people: data.people,
-      );
-      state = AsyncData(data);
-      // Prefetch a few recent message metas + audio in background.
-      unawaited(_prefetchRecent(api, data.conversations));
+      applyData(data);
     } catch (e, st) {
-      if (state is! AsyncData) {
+      if (state.asData == null) {
         state = AsyncError(e, st);
       }
     } finally {
       _busy = false;
     }
   }
-
-  Future<void> _prefetchRecent(
-    ApiClient api,
-    List<models.ConversationSummary> conversations,
-  ) async {
-    final recent = [...conversations]
-      ..sort((a, b) => (b.lastMessageAt ?? '').compareTo(a.lastMessageAt ?? ''));
-    for (final c in recent.take(5)) {
-      try {
-        final msgs = await api.listMessages(c.id, limit: 12);
-        await LocalCache.saveMessages(c.id, msgs);
-        await LocalCache.prefetchAudio(api, msgs, keep: 4);
-      } catch (_) {}
-    }
-  }
 }
 
+/// Kept alive so leaving a chat and returning is instant from memory/cache.
 final homeNotifierProvider =
-    StateNotifierProvider.autoDispose<HomeNotifier, AsyncValue<HomeData>>((ref) {
-  return HomeNotifier(ref);
+    StateNotifierProvider<HomeNotifier, AsyncValue<HomeData>>((ref) {
+  final notifier = HomeNotifier(ref);
+  ref.listen(authProvider, (prev, next) {
+    if (prev?.isLoggedIn != next.isLoggedIn ||
+        (prev?.loading == true && next.loading == false && next.isLoggedIn)) {
+      unawaited(notifier.refresh(silent: true));
+    }
+    if (prev?.isLoggedIn == true && !next.isLoggedIn) {
+      notifier.applyData((conversations: [], people: []));
+    }
+  });
+  return notifier;
 });
 
 /// Compatibility alias used by existing screens.
-final homeProvider = Provider.autoDispose<AsyncValue<HomeData>>((ref) {
+final homeProvider = Provider<AsyncValue<HomeData>>((ref) {
   return ref.watch(homeNotifierProvider);
 });
 

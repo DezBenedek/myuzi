@@ -4,11 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/models.dart';
+import '../providers/connectivity_provider.dart';
 import '../providers/providers.dart';
 import '../services/api_client.dart';
+import '../services/local_cache.dart';
+import '../services/toast.dart';
+import '../widgets/user_avatar.dart';
 import '../widgets/widgets.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -20,9 +25,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String? _inviteUrl;
-  String? _message;
   final _inviteEmail = TextEditingController();
   bool _openingWeb = false;
+  bool _avatarBusy = false;
 
   @override
   void dispose() {
@@ -31,29 +36,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _invite() async {
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
     try {
       final url = await ref.read(apiProvider).createInvite(
             email: _inviteEmail.text.trim().isEmpty ? null : _inviteEmail.text.trim(),
           );
-      setState(() {
-        _inviteUrl = url;
-        _message = 'Meghívó kész (vágólapra másolva).';
-      });
+      setState(() => _inviteUrl = url);
       await Clipboard.setData(ClipboardData(text: url));
+      if (mounted) showAppToast(context, 'Meghívó kész (vágólapra másolva)');
     } on ApiException catch (e) {
-      setState(() => _message = e.message);
+      if (mounted) showAppToast(context, e.message, error: true);
     }
   }
 
   Future<void> _openWebAccount() async {
+    final online = await ref.read(connectivityProvider.notifier).checkNow();
+    if (!online) {
+      if (mounted) {
+        showAppToast(context, 'Nincs internet — a fiókkezelő online kell', error: true);
+      }
+      return;
+    }
     setState(() => _openingWeb = true);
     try {
       final url = await ref.read(apiProvider).createWebAccountLink();
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-      }
+      if (mounted) showAppToast(context, e.message, error: true);
     } finally {
       if (mounted) setState(() => _openingWeb = false);
     }
@@ -78,6 +90,118 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _pickAvatar() async {
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
+    final picker = ImagePicker();
+    final file = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
+    );
+    if (file == null) return;
+
+    setState(() => _avatarBusy = true);
+    try {
+      final bytes = await file.readAsBytes();
+      final mime = file.mimeType ??
+          (file.path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
+      final user = await ref.read(apiProvider).uploadAvatar(
+            bytes: bytes,
+            contentType: mime,
+          );
+      await LocalCache.putAvatarBytes(user.id, bytes);
+      await ref.read(authProvider.notifier).setAvatar(user);
+      if (mounted) showAppToast(context, 'Profilkép mentve');
+    } on ApiException catch (e) {
+      if (mounted) showAppToast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _avatarBusy = false);
+    }
+  }
+
+  Future<void> _removeAvatar() async {
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
+    final me = ref.read(authProvider).user;
+    if (me == null || me.avatarUrl == null) return;
+
+    setState(() => _avatarBusy = true);
+    try {
+      final user = await ref.read(apiProvider).deleteAvatar();
+      await LocalCache.clearAvatar(user.id);
+      await ref.read(authProvider.notifier).setAvatar(user);
+      if (mounted) showAppToast(context, 'Profilkép törölve');
+    } on ApiException catch (e) {
+      if (mounted) showAppToast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _avatarBusy = false);
+    }
+  }
+
+  Future<void> _editFamilyName() async {
+    final fam = ref.read(familyProvider).asData?.value.family;
+    final me = ref.read(authProvider).user;
+    if (fam == null || me == null) return;
+    if (fam.ownerId != me.id) {
+      showAppToast(context, 'Csak a tulajdonos módosíthatja a család nevét', error: true);
+      return;
+    }
+    if (!ref.read(connectivityProvider)) {
+      showAppToast(context, 'Nincs internet', error: true);
+      return;
+    }
+
+    final ctrl = TextEditingController(text: fam.name);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Család neve', style: Theme.of(ctx).textTheme.titleLarge),
+              const SizedBox(height: 14),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(hintText: 'Család neve'),
+              ),
+              const SizedBox(height: 16),
+              BigButton(
+                label: 'Mentés',
+                icon: Icons.check,
+                onPressed: () => Navigator.pop(ctx, true),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    final name = ctrl.text.trim();
+    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.dispose());
+    if (ok != true || name.length < 2) return;
+
+    try {
+      await ref.read(apiProvider).renameFamily(familyId: fam.id, name: name);
+      ref.invalidate(familyProvider);
+      if (mounted) showAppToast(context, 'Családnév mentve');
+    } on ApiException catch (e) {
+      if (mounted) showAppToast(context, e.message, error: true);
+    }
   }
 
   Future<void> _removeMember(FamilyMember member) async {
@@ -114,16 +238,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.invalidate(familyProvider);
       unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(leaving ? 'Kiléptél a családból' : '${member.name} eltávolítva'),
-          ),
+        showAppToast(
+          context,
+          leaving ? 'Kiléptél a családból' : '${member.name} eltávolítva',
         );
       }
     } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-      }
+      if (mounted) showAppToast(context, e.message, error: true);
     }
   }
 
@@ -137,6 +258,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final members = family.asData?.value.members ?? const <FamilyMember>[];
     final me = auth.user?.id;
     final isOwner = fam?.ownerId == me;
+    final user = auth.user;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Beállítások')),
@@ -144,19 +266,102 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
           SoftCard(
-            onTap: _editProfile,
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: _avatarBusy ? null : _pickAvatar,
+                  onLongPress: user?.avatarUrl != null && !_avatarBusy
+                      ? _removeAvatar
+                      : null,
+                  child: Stack(
+                    children: [
+                      UserAvatar(
+                        name: user?.name ?? '?',
+                        avatarUrl: user?.avatarUrl,
+                        userId: user?.id,
+                        radius: 32,
+                      ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: t.colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: _avatarBusy
+                              ? const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.camera_alt,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: InkWell(
+                    onTap: _editProfile,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(user?.name ?? '', style: t.textTheme.titleLarge),
+                        Text(user?.email ?? '', style: t.textTheme.bodyMedium),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Profilkép: koppints · törlés: hosszan',
+                          style: t.textTheme.labelMedium?.copyWith(
+                            color: t.colorScheme.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Szerkesztés',
+                  onPressed: _editProfile,
+                  icon: Icon(Icons.edit_outlined, color: t.colorScheme.primary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SoftCard(
+            onTap: fam == null ? null : _editFamilyName,
             child: Row(
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(auth.user?.name ?? '', style: t.textTheme.titleLarge),
-                      Text(auth.user?.email ?? '', style: t.textTheme.bodyMedium),
+                      Text('Család neve', style: t.textTheme.titleLarge),
+                      const SizedBox(height: 4),
+                      Text(
+                        fam?.name ?? 'Nincs család',
+                        style: t.textTheme.bodyLarge,
+                      ),
+                      if (fam != null && !isOwner)
+                        Text(
+                          'Csak a tulajdonos módosíthatja',
+                          style: t.textTheme.bodyMedium,
+                        ),
                     ],
                   ),
                 ),
-                Icon(Icons.edit_outlined, color: t.colorScheme.primary),
+                if (isOwner)
+                  Icon(Icons.edit_outlined, color: t.colorScheme.primary),
               ],
             ),
           ),
@@ -185,6 +390,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     final canLeave = !isOwner && isMe;
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
+                      leading: UserAvatar(
+                        name: m.name,
+                        avatarUrl: m.avatarUrl,
+                        userId: m.id,
+                        radius: 20,
+                      ),
                       title: Text(
                         isMe ? '${m.name} (te)' : m.name,
                         style: t.textTheme.titleMedium,
@@ -229,10 +440,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 if (_inviteUrl != null) ...[
                   const SizedBox(height: 10),
                   SelectableText(_inviteUrl!, style: t.textTheme.bodyMedium),
-                ],
-                if (_message != null) ...[
-                  const SizedBox(height: 8),
-                  Text(_message!, style: t.textTheme.bodyMedium),
                 ],
               ],
             ),

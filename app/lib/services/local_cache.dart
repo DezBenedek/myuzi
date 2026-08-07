@@ -15,6 +15,34 @@ class LocalCache {
   static const _homeKey = 'cache_home_v1';
   static String _messagesKey(String conversationId) => 'cache_msgs_v1_$conversationId';
 
+  static Future<Directory> _avatarDir() async {
+    final root = await getApplicationSupportDirectory();
+    final dir = Directory('${root.path}/avatar_cache');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
+  static Future<File> avatarFile(String userId) async {
+    final dir = await _avatarDir();
+    return File('${dir.path}/$userId.bin');
+  }
+
+  static Future<Uint8List?> loadAvatarBytes(String userId) async {
+    final file = await avatarFile(userId);
+    if (!await file.exists()) return null;
+    return file.readAsBytes();
+  }
+
+  static Future<void> putAvatarBytes(String userId, Uint8List bytes) async {
+    final file = await avatarFile(userId);
+    await file.writeAsBytes(bytes, flush: true);
+  }
+
+  static Future<void> clearAvatar(String userId) async {
+    final file = await avatarFile(userId);
+    if (await file.exists()) await file.delete();
+  }
+
   static Future<Directory> _audioDir() async {
     final root = await getApplicationSupportDirectory();
     final dir = Directory('${root.path}/voice_cache');
@@ -145,6 +173,7 @@ class LocalCache {
         'name': m.name,
         'email': m.email,
         'role': m.role,
+        'avatarUrl': m.avatarUrl,
       };
 
   static Map<String, dynamic> _conversationJson(ConversationSummary c) => {
@@ -154,6 +183,8 @@ class LocalCache {
         'memberCount': c.memberCount,
         'lastMessageAt': c.lastMessageAt,
         'lastSenderName': c.lastSenderName,
+        'avatarUrl': c.avatarUrl,
+        'pinned': c.pinned,
         'unreadCount': c.unreadCount,
         'members': c.members.map(_memberJson).toList(),
       };
@@ -167,5 +198,6 @@ class LocalCache {
         'createdAt': m.createdAt,
         'url': m.url,
         'unread': m.unread,
+        'waveBars': m.waveBars,
       };
 }
