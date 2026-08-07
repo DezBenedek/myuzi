@@ -262,6 +262,19 @@ export function accountPage(opts: {
       : family?.plan === "family"
         ? "max 6 tag · 10 perc hangüzenet · hang- és videóhívás · csoport"
         : "max 3 tag · 2 perc hangüzenet · nincs hívás · nincs csoport";
+  const isPaid = family?.plan === "family" || family?.plan === "family_plus";
+  const isCanceling = family?.stripe_status === "canceling";
+  const pendingPlan = family?.stripe_status?.startsWith("pending:")
+    ? family.stripe_status.slice("pending:".length)
+    : null;
+  const pendingLabel =
+    pendingPlan === "family_plus" ? "Family+" : pendingPlan === "family" ? "Family" : null;
+  const planCta = isPaid ? "Csomagmódosítás" : "Előfizetés";
+  const planStatusHint = isCanceling
+    ? "Lemondva — a jelenlegi hónap végéig még érvényes."
+    : pendingLabel
+      ? `Váltás ${pendingLabel} csomagra a hónap végén.`
+      : "";
 
   const familyBlock = !family
     ? `
@@ -316,11 +329,26 @@ export function accountPage(opts: {
           ? `<div class="panel">
         <p class="plan-current">Jelenlegi csomagod: ${currentPlan}</p>
         <p class="hint">${planLimits}</p>
+        ${planStatusHint ? `<p class="ok">${planStatusHint}</p>` : ""}
         <form method="GET" action="/account/plans" style="margin-top:14px">
-          <button type="submit">Előfizetés</button>
+          <button type="submit">${planCta}</button>
         </form>
         ${
-          family.plan === "family" || family.plan === "family_plus"
+          isPaid && !isCanceling
+            ? `<form method="POST" action="/account/cancel-subscription" onsubmit="return confirm('Lemondod az előfizetést? A hónap végéig még használhatod.')">
+                <button class="ghost" type="submit">Előfizetés lemondása</button>
+              </form>`
+            : ""
+        }
+        ${
+          isCanceling
+            ? `<form method="POST" action="/account/resume-subscription">
+                <button type="submit">Lemondás visszavonása</button>
+              </form>`
+            : ""
+        }
+        ${
+          isPaid
             ? `<form method="POST" action="/account/portal"><button class="ghost" type="submit">Stripe portál</button></form>`
             : ""
         }
@@ -358,12 +386,26 @@ export function plansPage(opts: {
   const { user, currentPlan } = opts;
   const familyActive = currentPlan === "family";
   const plusActive = currentPlan === "family_plus";
+  const isPaid = familyActive || plusActive;
+  const pageTitle = isPaid ? "Csomagmódosítás" : "Előfizetés";
+
+  const familyBtn = familyActive
+    ? "Jelenlegi csomag"
+    : plusActive
+      ? "Váltás hónap végén"
+      : "Ezt választom";
+  const plusBtn = plusActive
+    ? "Jelenlegi csomag"
+    : familyActive
+      ? "Váltás most"
+      : "Ezt választom";
 
   return layout(
-    "Előfizetés",
+    pageTitle,
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Válassz csomagot</p>
+    <p class="sub">${isPaid ? "Csomag módosítása" : "Válassz csomagot"}</p>
+    <p class="hint">Upgrade azonnal érvényes. Downgrade a hónap végén lép életbe.</p>
     <div class="panel" style="display:grid;gap:14px">
       <div class="plan-card">
         <h3>Family</h3>
@@ -376,9 +418,7 @@ export function plansPage(opts: {
         </ul>
         <form method="GET" action="/account/billing">
           <input type="hidden" name="plan" value="family" />
-          <button type="submit"${familyActive ? " class=\"secondary\"" : ""}>${
-            familyActive ? "Jelenlegi csomag" : "Ezt választom"
-          }</button>
+          <button type="submit"${familyActive ? " class=\"secondary\" disabled" : ""}>${familyBtn}</button>
         </form>
       </div>
       <div class="plan-card">
@@ -392,11 +432,16 @@ export function plansPage(opts: {
         </ul>
         <form method="GET" action="/account/billing">
           <input type="hidden" name="plan" value="family_plus" />
-          <button type="submit"${plusActive ? " class=\"secondary\"" : ""}>${
-            plusActive ? "Jelenlegi csomag" : "Ezt választom"
-          }</button>
+          <button type="submit"${plusActive ? " class=\"secondary\" disabled" : ""}>${plusBtn}</button>
         </form>
       </div>
+      ${
+        isPaid
+          ? `<form method="POST" action="/account/cancel-subscription" onsubmit="return confirm('Lemondod az előfizetést? A hónap végéig még használhatod.')">
+              <button class="ghost" type="submit">Előfizetés lemondása</button>
+            </form>`
+          : ""
+      }
       <form method="GET" action="/account">
         <button class="ghost" type="submit">Vissza</button>
       </form>
@@ -418,9 +463,10 @@ export function billingPage(opts: {
     billing_postal_code?: string | null;
     billing_country?: string | null;
   };
+  currentPlan?: string;
   error?: string;
 }): string {
-  const { user, plan, billing, error } = opts;
+  const { user, plan, billing, currentPlan, error } = opts;
   const isCompany = billing?.billing_type === "company";
   const planName = plan === "family_plus" ? "Family+" : "Family";
   const price = plan === "family_plus" ? "4990" : "1990";
@@ -429,12 +475,26 @@ export function billingPage(opts: {
   const savedAddr = billing?.billing_address_line1 ?? "";
   const savedCity = billing?.billing_city ?? "";
   const savedPostal = billing?.billing_postal_code ?? "";
+  const isChange =
+    currentPlan === "family" || currentPlan === "family_plus";
+  const isDowngrade =
+    currentPlan === "family_plus" && plan === "family";
+  const submitLabel = !isChange
+    ? "Fizetés"
+    : isDowngrade
+      ? "Váltás hónap végén"
+      : "Váltás most";
 
   return layout(
-    "Számlázás",
+    isChange ? "Csomagváltás" : "Számlázás",
     `
     <h1 class="brand">MyÜzi</h1>
     <p class="sub">${planName} · ${price} Ft/hó</p>
+    ${
+      isDowngrade
+        ? `<p class="ok">A kisebb csomag a jelenlegi hónap végén lép életbe.</p>`
+        : ""
+    }
     ${error ? `<p class="error">${error}</p>` : ""}
     <div class="panel">
       <p class="hint">A számlázási adatok nálunk maradnak (manuális számla). A Stripe nem kéri őket újra.</p>
@@ -464,7 +524,7 @@ export function billingPage(opts: {
           </div>
         </div>
         <input type="hidden" name="country" value="${escape(billing?.billing_country || "HU")}" />
-        <button type="submit">Fizetés</button>
+        <button type="submit">${submitLabel}</button>
       </form>
       <form method="GET" action="/account/plans" style="margin-top:8px">
         <button class="ghost" type="submit">Vissza</button>

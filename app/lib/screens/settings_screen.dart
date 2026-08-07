@@ -24,33 +24,8 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  String? _inviteUrl;
-  final _inviteEmail = TextEditingController();
   bool _openingWeb = false;
   bool _avatarBusy = false;
-
-  @override
-  void dispose() {
-    _inviteEmail.dispose();
-    super.dispose();
-  }
-
-  Future<void> _invite() async {
-    if (!ref.read(connectivityProvider)) {
-      showAppToast(context, 'Nincs internet', error: true);
-      return;
-    }
-    try {
-      final url = await ref.read(apiProvider).createInvite(
-            email: _inviteEmail.text.trim().isEmpty ? null : _inviteEmail.text.trim(),
-          );
-      setState(() => _inviteUrl = url);
-      await Clipboard.setData(ClipboardData(text: url));
-      if (mounted) showAppToast(context, 'Meghívó kész (vágólapra másolva)');
-    } on ApiException catch (e) {
-      if (mounted) showAppToast(context, e.message, error: true);
-    }
-  }
 
   Future<void> _openWebAccount() async {
     final online = await ref.read(connectivityProvider.notifier).checkNow();
@@ -89,6 +64,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               );
         },
       ),
+    );
+  }
+
+  Future<void> _avatarActions() async {
+    final user = ref.read(authProvider).user;
+    if (user == null || _avatarBusy) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        final hasAvatar = user.avatarUrl != null;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: Text(hasAvatar ? 'Profilkép cseréje' : 'Profilkép beállítása'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickAvatar();
+                  },
+                ),
+                if (hasAvatar)
+                  ListTile(
+                    leading: Icon(Icons.delete_outline, color: t.colorScheme.error),
+                    title: Text(
+                      'Profilkép törlése',
+                      style: TextStyle(color: t.colorScheme.error),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _removeAvatar();
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -144,6 +163,133 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } finally {
       if (mounted) setState(() => _avatarBusy = false);
     }
+  }
+
+  Future<void> _inviteDrawer() async {
+    final emailCtrl = TextEditingController();
+    String? inviteUrl;
+    var busy = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Meghívó', style: Theme.of(ctx).textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Opcionális email — ha megadod, elküldjük a meghívót.',
+                    style: Theme.of(ctx).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: emailCtrl,
+                    keyboardType: TextInputType.emailAddress,
+                    autofocus: true,
+                    decoration: const InputDecoration(hintText: 'Email@pelda.hu (opcionális)'),
+                  ),
+                  if (inviteUrl != null) ...[
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      inviteUrl!,
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  BigButton(
+                    label: busy ? 'Készítés…' : 'Meghívó készítése',
+                    icon: Icons.link,
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            if (!ref.read(connectivityProvider)) {
+                              showAppToast(ctx, 'Nincs internet', error: true);
+                              return;
+                            }
+                            setLocal(() => busy = true);
+                            try {
+                              final url = await ref.read(apiProvider).createInvite(
+                                    email: emailCtrl.text.trim().isEmpty
+                                        ? null
+                                        : emailCtrl.text.trim(),
+                                  );
+                              await Clipboard.setData(ClipboardData(text: url));
+                              setLocal(() {
+                                inviteUrl = url;
+                                busy = false;
+                              });
+                              if (ctx.mounted) {
+                                showAppToast(ctx, 'Meghívó kész (vágólapra másolva)');
+                              }
+                            } on ApiException catch (e) {
+                              setLocal(() => busy = false);
+                              if (ctx.mounted) {
+                                showAppToast(ctx, e.message, error: true);
+                              }
+                            }
+                          },
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => emailCtrl.dispose());
+  }
+
+  Future<void> _confirmLogout() async {
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Kijelentkezés', style: t.textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(
+                  'Biztosan kijelentkezel?',
+                  style: t.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: 'Kijelentkezés',
+                  icon: Icons.logout,
+                  danger: true,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  icon: Icons.close,
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    await ref.read(authProvider.notifier).logout();
+    if (mounted) context.go('/login');
   }
 
   Future<void> _editFamilyName() async {
@@ -210,23 +356,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (fam == null || me == null) return;
 
     final leaving = member.id == me.id;
-    final ok = await showDialog<bool>(
+    final ok = await showModalBottomSheet<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(leaving ? 'Kilépés a családból' : 'Tag eltávolítása'),
-        content: Text(
-          leaving
-              ? 'Biztosan kilépsz a(z) ${fam.name} családból?'
-              : 'Eltávolítod ${member.name}-t a családból?',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Mégse')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(leaving ? 'Kilépek' : 'Eltávolít'),
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  leaving ? 'Kilépés a családból' : 'Tag eltávolítása',
+                  style: t.textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  leaving
+                      ? 'Biztosan kilépsz a(z) ${fam.name} családból?'
+                      : 'Eltávolítod ${member.name}-t a családból?',
+                  style: t.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: leaving ? 'Kilépek' : 'Eltávolít',
+                  icon: leaving ? Icons.logout : Icons.person_remove_outlined,
+                  danger: true,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  icon: Icons.close,
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
     if (ok != true) return;
 
@@ -269,10 +440,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: _avatarBusy ? null : _pickAvatar,
-                  onLongPress: user?.avatarUrl != null && !_avatarBusy
-                      ? _removeAvatar
-                      : null,
+                  onTap: _avatarBusy ? null : _avatarActions,
                   child: Stack(
                     children: [
                       UserAvatar(
@@ -318,13 +486,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       children: [
                         Text(user?.name ?? '', style: t.textTheme.titleLarge),
                         Text(user?.email ?? '', style: t.textTheme.bodyMedium),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Profilkép: koppints · törlés: hosszan',
-                          style: t.textTheme.labelMedium?.copyWith(
-                            color: t.colorScheme.onSurface.withValues(alpha: 0.55),
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -379,8 +540,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Családtagok', style: t.textTheme.titleLarge),
-                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('Családtagok', style: t.textTheme.titleLarge),
+                    ),
+                    if (fam != null)
+                      IconButton(
+                        tooltip: 'Meghívó',
+                        onPressed: _inviteDrawer,
+                        icon: Icon(Icons.add, color: t.colorScheme.primary),
+                      ),
+                  ],
+                ),
                 if (members.isEmpty)
                   Text('Nincs család', style: t.textTheme.bodyMedium)
                 else
@@ -424,32 +596,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Meghívó', style: t.textTheme.titleLarge),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _inviteEmail,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(hintText: 'Email (opcionális)'),
+                Text(
+                  fam == null
+                      ? 'Előfizetés'
+                      : fam.isPaid
+                          ? 'Csomagmódosítás'
+                          : 'Előfizetés',
+                  style: t.textTheme.titleLarge,
                 ),
-                const SizedBox(height: 10),
-                BigButton(
-                  label: 'Meghívó',
-                  icon: Icons.link,
-                  onPressed: _invite,
-                ),
-                if (_inviteUrl != null) ...[
-                  const SizedBox(height: 10),
-                  SelectableText(_inviteUrl!, style: t.textTheme.bodyMedium),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          SoftCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('Előfizetés', style: t.textTheme.titleLarge),
                 const SizedBox(height: 8),
                 Text(
                   fam == null ? 'Nincs család' : fam.planSummary,
@@ -457,7 +611,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 const SizedBox(height: 10),
                 BigButton(
-                  label: _openingWeb ? 'Megnyitás…' : 'Fiókkezelő',
+                  label: _openingWeb
+                      ? 'Megnyitás…'
+                      : fam == null
+                          ? 'Fiókkezelő'
+                          : fam.isPaid
+                              ? 'Csomagmódosítás'
+                              : 'Előfizetés',
                   icon: Icons.open_in_browser,
                   outlined: true,
                   onPressed: _openingWeb ? null : _openWebAccount,
@@ -471,10 +631,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             icon: Icons.logout,
             outlined: true,
             danger: true,
-            onPressed: () async {
-              await ref.read(authProvider.notifier).logout();
-              if (context.mounted) context.go('/login');
-            },
+            onPressed: _confirmLogout,
           ),
         ],
       ),

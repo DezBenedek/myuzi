@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 import type { Env, Variables } from "../types";
 import { getFamily, getUserFamily, publicFamily } from "../lib/db";
-import { getStripe, maxMembersForPlan, planFromPriceId, PLAN_FEATURES, PLAN_PRICES_HUF } from "../lib/stripe";
+import {
+  getStripe,
+  hasPaidPlan,
+  maxMembersForPlan,
+  planFromPriceId,
+  PLAN_FEATURES,
+} from "../lib/stripe";
 import { publicBaseUrl } from "../lib/urls";
 import { requireAuth } from "../middleware/auth";
 
@@ -138,7 +144,8 @@ billing.post("/webhook", async (c) => {
       const sub = event.data.object as {
         id: string;
         status: string;
-        metadata?: { familyId?: string; plan?: string };
+        cancel_at_period_end?: boolean;
+        metadata?: { familyId?: string; plan?: string; pending_plan?: string };
         items?: { data?: Array<{ price?: { id?: string } }> };
         customer?: string;
       };
@@ -164,15 +171,28 @@ billing.post("/webhook", async (c) => {
       }
 
       const priceId = sub.items?.data?.[0]?.price?.id;
+      // Prefer live price over stale metadata (portal / scheduled changes).
+      const planFromPrice = priceId ? planFromPriceId(c.env, priceId) : null;
       const plan =
+        planFromPrice ||
         (sub.metadata?.plan as "family" | "family_plus" | undefined) ||
-        (priceId ? planFromPriceId(c.env, priceId) : null) ||
         "family";
+
+      let status = sub.status;
+      if (sub.cancel_at_period_end && sub.status === "active") {
+        status = "canceling";
+      } else if (
+        sub.metadata?.pending_plan &&
+        hasPaidPlan(sub.metadata.pending_plan) &&
+        sub.metadata.pending_plan !== plan
+      ) {
+        status = `pending:${sub.metadata.pending_plan}`;
+      }
 
       await applyPlan(c.env, familyId, plan, {
         subscriptionId: sub.id,
         customerId: typeof sub.customer === "string" ? sub.customer : null,
-        status: sub.status,
+        status,
       });
       break;
     }
@@ -193,7 +213,7 @@ billing.get("/status", requireAuth, async (c) => {
   });
 });
 
-async function applyPlan(
+export async function applyPlan(
   env: Env,
   familyId: string,
   plan: "family" | "family_plus",

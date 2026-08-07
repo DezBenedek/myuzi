@@ -22,7 +22,8 @@ import {
   memberCount,
 } from "../lib/db";
 import { inviteEmail, loginCodeEmail, sendEmail } from "../lib/email";
-import { getStripe } from "../lib/stripe";
+import { getStripe, changePaidPlan, cancelAtPeriodEnd, resumeSubscription } from "../lib/stripe";
+import { applyPlan } from "./billing";
 import { publicBaseUrl } from "../lib/urls";
 import { optionalAuth } from "../middleware/auth";
 import {
@@ -317,9 +318,15 @@ web.get("/account", optionalAuth, async (c) => {
   const message =
     billing === "success"
       ? "Sikeres előfizetés — köszönjük!"
-      : billing === "cancel"
-        ? "Az előfizetés megszakítva."
-        : undefined;
+      : billing === "scheduled"
+        ? "A csomagváltás a jelenlegi hónap végén lép életbe."
+        : billing === "canceled"
+          ? "Az előfizetés lemondva — a hónap végéig még érvényes."
+          : billing === "resumed"
+            ? "Az előfizetés folytatódik."
+            : billing === "cancel"
+              ? "A fizetés megszakítva."
+              : undefined;
 
   return c.html(accountPage({ user, family, members, message }));
 });
@@ -465,7 +472,7 @@ web.get("/account/billing", optionalAuth, async (c) => {
   const plan = String(c.req.query("plan") ?? "");
   if (plan !== "family" && plan !== "family_plus") return c.redirect("/account/plans");
 
-  return c.html(billingPage({ user, plan, billing: family }));
+  return c.html(billingPage({ user, plan, billing: family, currentPlan: family.plan }));
 });
 
 web.post("/account/checkout", optionalAuth, async (c) => {
@@ -502,6 +509,7 @@ web.post("/account/checkout", optionalAuth, async (c) => {
         user,
         plan,
         billing: billingDraft,
+        currentPlan: family.plan,
         error: "Töltsd ki a számlázási adatokat (név, cím, város, irányítószám).",
       }),
       400,
@@ -513,6 +521,7 @@ web.post("/account/checkout", optionalAuth, async (c) => {
         user,
         plan,
         billing: billingDraft,
+        currentPlan: family.plan,
         error: "Cégnél adószám is kell.",
       }),
       400,
@@ -541,6 +550,34 @@ web.post("/account/checkout", optionalAuth, async (c) => {
 
   try {
     const stripe = getStripe(c.env);
+
+    // Already subscribed → change plan (upgrade now / downgrade at period end).
+    if (family.stripe_subscription_id && hasPaidPlan(family.plan)) {
+      if (family.plan === plan) {
+        return c.redirect("/account?billing=success");
+      }
+      const result = await changePaidPlan(stripe, c.env, {
+        subscriptionId: family.stripe_subscription_id,
+        currentPlan: family.plan,
+        newPlan: plan,
+        familyId: family.id,
+      });
+      if (result === "immediate") {
+        await applyPlan(c.env, family.id, plan, {
+          subscriptionId: family.stripe_subscription_id,
+          customerId: family.stripe_customer_id,
+          status: "active",
+        });
+        return c.redirect("/account?billing=success");
+      }
+      await c.env.DB.prepare(
+        `UPDATE families SET stripe_status = ?, updated_at = datetime('now') WHERE id = ?`,
+      )
+        .bind(`pending:${plan}`, family.id)
+        .run();
+      return c.redirect("/account?billing=scheduled");
+    }
+
     let customerId = family.stripe_customer_id;
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -586,10 +623,55 @@ web.post("/account/checkout", optionalAuth, async (c) => {
         user,
         plan,
         billing: { ...family, ...billingDraft },
+        currentPlan: family.plan,
         error: msg,
       }),
       500,
     );
+  }
+});
+
+web.post("/account/cancel-subscription", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+  const family = await getUserFamily(c.env.DB, user.id);
+  if (!family?.stripe_subscription_id || family.owner_id !== user.id) {
+    return c.redirect("/account");
+  }
+  try {
+    const stripe = getStripe(c.env);
+    await cancelAtPeriodEnd(stripe, family.stripe_subscription_id);
+    await c.env.DB.prepare(
+      `UPDATE families SET stripe_status = 'canceling', updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(family.id)
+      .run();
+    return c.redirect("/account?billing=canceled");
+  } catch (err) {
+    console.error("[cancel-subscription]", err);
+    return c.redirect("/account");
+  }
+});
+
+web.post("/account/resume-subscription", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+  const family = await getUserFamily(c.env.DB, user.id);
+  if (!family?.stripe_subscription_id || family.owner_id !== user.id) {
+    return c.redirect("/account");
+  }
+  try {
+    const stripe = getStripe(c.env);
+    await resumeSubscription(stripe, family.stripe_subscription_id);
+    await c.env.DB.prepare(
+      `UPDATE families SET stripe_status = 'active', updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(family.id)
+      .run();
+    return c.redirect("/account?billing=resumed");
+  } catch (err) {
+    console.error("[resume-subscription]", err);
+    return c.redirect("/account");
   }
 });
 

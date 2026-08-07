@@ -46,6 +46,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Timer? _maxRecordTimer;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<void>? _completeSub;
+  Timer? _progressTick;
   bool _sending = false;
 
   int get _maxRecordMs {
@@ -57,6 +58,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     _completeSub = _player.onPlayerComplete.listen((_) {
+      _progressTick?.cancel();
       if (mounted) {
         setState(() {
           _playingId = null;
@@ -65,17 +67,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         });
       }
     });
-    _posSub = _player.onPositionChanged.listen((pos) {
-      if (!mounted || _playingId == null) return;
-      final total = _playingDurationMs;
-      if (total <= 0) return;
-      final next = (pos.inMilliseconds / total).clamp(0.0, 1.0);
-      // Avoid rebuild spam — only update when progress moves ~1%.
-      if ((next - _playProgress).abs() < 0.01 && next < 0.99) return;
-      setState(() => _playProgress = next);
-    });
+    _posSub = _player.onPositionChanged.listen(_onPlayPosition);
     _boot();
     _refresh = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true));
+  }
+
+  void _onPlayPosition(Duration pos) {
+    if (!mounted || _playingId == null) return;
+    final total = _playingDurationMs;
+    if (total <= 0) return;
+    final next = (pos.inMilliseconds / total).clamp(0.0, 1.0);
+    // Update when progress moves enough for a smooth scrub (~half a bar).
+    if ((next - _playProgress).abs() < 0.008 && next < 0.995) return;
+    setState(() => _playProgress = next);
+  }
+
+  void _startProgressTicker() {
+    _progressTick?.cancel();
+    _progressTick = Timer.periodic(const Duration(milliseconds: 50), (_) async {
+      if (!mounted || _playingId == null) return;
+      final pos = await _player.getCurrentPosition();
+      if (pos == null) return;
+      _onPlayPosition(pos);
+    });
   }
 
   @override
@@ -83,6 +97,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _refresh?.cancel();
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
+    _progressTick?.cancel();
     _posSub?.cancel();
     _completeSub?.cancel();
     _scroll.dispose();
@@ -270,6 +285,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _play(VoiceMessage msg) async {
     if (_playingId == msg.id) {
+      _progressTick?.cancel();
       await _player.stop();
       setState(() {
         _playingId = null;
@@ -291,14 +307,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         file = await LocalCache.audioFile(msg.id);
       }
 
-      final durationMs = msg.durationMs > 0 ? msg.durationMs : 1;
+      final fallbackMs = msg.durationMs > 200 ? msg.durationMs : 1000;
       setState(() {
         _playingId = msg.id;
         _playProgress = 0;
-        _playingDurationMs = durationMs;
+        _playingDurationMs = fallbackMs;
       });
+      await _player.stop();
       await _player.play(DeviceFileSource(file.path));
+      _startProgressTicker();
+
+      // Prefer real media duration once (not on every position tick).
+      final mediaDur = await _player.getDuration();
+      if (mounted &&
+          _playingId == msg.id &&
+          mediaDur != null &&
+          mediaDur.inMilliseconds > 200) {
+        setState(() => _playingDurationMs = mediaDur.inMilliseconds);
+      }
     } on ApiException catch (e) {
+      _progressTick?.cancel();
       if (mounted) showAppToast(context, e.message, error: true);
     }
   }
@@ -381,13 +409,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       },
     );
     if (ok != true) return;
+
+    final prev = _messages;
+    final next = _messages.where((m) => m.id != msg.id).toList();
+    setState(() => _messages = next);
+    unawaited(LocalCache.saveMessages(widget.conversationId, next));
+    if (_playingId == msg.id) {
+      unawaited(_player.stop());
+      setState(() {
+        _playingId = null;
+        _playProgress = 0;
+        _playingDurationMs = 0;
+      });
+    }
+
     try {
       await ref.read(apiProvider).deleteMessage(msg.id);
-      if (!mounted) return;
-      setState(() => _messages = _messages.where((m) => m.id != msg.id).toList());
-      await LocalCache.saveMessages(widget.conversationId, _messages);
     } on ApiException catch (e) {
-      if (mounted) showAppToast(context, e.message, error: true);
+      if (!mounted) return;
+      setState(() => _messages = prev);
+      unawaited(LocalCache.saveMessages(widget.conversationId, prev));
+      showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _messages = prev);
+      unawaited(LocalCache.saveMessages(widget.conversationId, prev));
+      showAppToast(context, 'Törlés sikertelen', error: true);
     }
   }
 
