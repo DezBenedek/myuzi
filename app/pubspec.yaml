@@ -26,7 +26,6 @@ dependencies:
   record: ^7.1.1
   audioplayers: ^6.8.1
   livekit_client: ^2.10.0
-  permission_handler: ^13.0.0
   path_provider: ^2.1.6
   intl: ^0.20.3
   uuid: ^4.6.0
