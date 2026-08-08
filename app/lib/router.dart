@@ -60,10 +60,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-      GoRoute(path: '/verify', builder: (_, __) => const VerifyScreen()),
-      GoRoute(path: '/onboarding', builder: (_, __) => const OnboardingScreen()),
-      GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
+      GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+      GoRoute(path: '/verify', builder: (_, _) => const VerifyScreen()),
+      GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),
+      GoRoute(path: '/', builder: (_, _) => const HomeScreen()),
       GoRoute(
         path: '/chat/:id',
         builder: (_, state) => ChatScreen(conversationId: state.pathParameters['id']!),
@@ -85,7 +85,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/invite/:token',
         builder: (_, state) => InviteScreen(token: state.pathParameters['token']!),
       ),
-      GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+      GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
     ],
   );
 });

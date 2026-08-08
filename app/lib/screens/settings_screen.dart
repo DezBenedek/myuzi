@@ -36,12 +36,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
       return;
     }
+    if (!mounted) return;
     setState(() => _openingWeb = true);
     try {
       final url = await ref.read(apiProvider).createWebAccountLink();
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } on ApiException catch (e) {
       if (mounted) showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (mounted) showAppToast(context, 'Fiókkezelő megnyitása sikertelen', error: true);
     } finally {
       if (mounted) setState(() => _openingWeb = false);
     }
@@ -114,21 +117,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _pickAvatar() async {
     if (!ref.read(connectivityProvider)) {
+      if (!mounted) return;
       showAppToast(context, 'Nincs internet', error: true);
       return;
     }
     final picker = ImagePicker();
     final file = await picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 1024,
-      maxHeight: 1024,
-      imageQuality: 85,
+      maxWidth: 768,
+      maxHeight: 768,
+      imageQuality: 75,
     );
     if (file == null) return;
+    if (!mounted) return;
 
     setState(() => _avatarBusy = true);
     try {
       final bytes = await file.readAsBytes();
+      if (bytes.isEmpty || bytes.length > 1024 * 1024) {
+        if (mounted) showAppToast(context, 'A kép legfeljebb 1 MB lehet', error: true);
+        return;
+      }
       final mime = file.mimeType ??
           (file.path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
       final user = await ref.read(apiProvider).uploadAvatar(
@@ -140,6 +149,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) showAppToast(context, 'Profilkép mentve');
     } on ApiException catch (e) {
       if (mounted) showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (mounted) showAppToast(context, 'Profilkép mentése sikertelen', error: true);
     } finally {
       if (mounted) setState(() => _avatarBusy = false);
     }
@@ -147,6 +158,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _removeAvatar() async {
     if (!ref.read(connectivityProvider)) {
+      if (!mounted) return;
       showAppToast(context, 'Nincs internet', error: true);
       return;
     }
@@ -161,6 +173,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) showAppToast(context, 'Profilkép törölve');
     } on ApiException catch (e) {
       if (mounted) showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (mounted) showAppToast(context, 'Profilkép törlése sikertelen', error: true);
     } finally {
       if (mounted) setState(() => _avatarBusy = false);
     }
@@ -304,7 +318,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         );
       },
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
 
     try {
       await ref.read(apiProvider).removeFamilyMember(

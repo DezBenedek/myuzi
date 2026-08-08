@@ -19,12 +19,13 @@ String? parseQrUserId(String raw) {
     final i = parts.indexOf('u');
     if (i >= 0 && i + 1 < parts.length) {
       final id = parts[i + 1];
-      if (id.isNotEmpty) return id;
+      if (RegExp(r'^[A-Za-z0-9_-]{8,80}$').hasMatch(id)) return id;
     }
   }
   final m = RegExp(r'(?:^|/)u/([A-Za-z0-9_-]+)').firstMatch(text);
-  if (m != null) return m.group(1);
-  if (RegExp(r'^[A-Za-z0-9_-]{8,}$').hasMatch(text)) return text;
+  final pathId = m?.group(1);
+  if (pathId != null && pathId.length >= 8 && pathId.length <= 80) return pathId;
+  if (RegExp(r'^[A-Za-z0-9_-]{8,80}$').hasMatch(text)) return text;
   return null;
 }
 
@@ -141,8 +142,9 @@ class _MyQrSheetState extends ConsumerState<_MyQrSheet> {
               tooltip: 'Másik QR beolvasása',
               iconSize: 36,
               onPressed: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
+                final navigator = Navigator.of(context);
+                navigator.pop();
+                navigator.push(
                   MaterialPageRoute<void>(
                     builder: (_) => const QrScanScreen(),
                   ),
@@ -202,9 +204,9 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     }
 
     setState(() => _handling = true);
-    await _controller.stop();
 
     try {
+      await _controller.stop();
       if (!ref.read(connectivityProvider)) {
         if (mounted) showAppToast(context, 'Nincs internet', error: true);
         return;

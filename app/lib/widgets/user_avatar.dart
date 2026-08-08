@@ -30,6 +30,7 @@ class UserAvatar extends ConsumerStatefulWidget {
 class _UserAvatarState extends ConsumerState<UserAvatar> {
   Uint8List? _bytes;
   String? _loadedFor;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -42,6 +43,9 @@ class _UserAvatarState extends ConsumerState<UserAvatar> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.avatarUrl != widget.avatarUrl ||
         oldWidget.userId != widget.userId) {
+      _loadGeneration++;
+      _bytes = null;
+      _loadedFor = null;
       _load();
     }
   }
@@ -59,10 +63,11 @@ class _UserAvatarState extends ConsumerState<UserAvatar> {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     final url = widget.avatarUrl;
     final cacheId = _cacheId;
     if (url == null || url.isEmpty || cacheId == null) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           _bytes = null;
           _loadedFor = null;
@@ -73,7 +78,7 @@ class _UserAvatarState extends ConsumerState<UserAvatar> {
     if (_loadedFor == url && _bytes != null) return;
 
     final cached = await LocalCache.loadAvatarBytes(cacheId);
-    if (cached != null && mounted) {
+    if (cached != null && mounted && generation == _loadGeneration) {
       setState(() {
         _bytes = cached;
         _loadedFor = url;
@@ -82,8 +87,9 @@ class _UserAvatarState extends ConsumerState<UserAvatar> {
 
     try {
       final bytes = await ref.read(apiProvider).downloadBytes(url);
+      if (generation != _loadGeneration) return;
       await LocalCache.putAvatarBytes(cacheId, bytes);
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           _bytes = bytes;
           _loadedFor = url;

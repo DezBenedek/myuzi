@@ -36,7 +36,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       ref.invalidate(familyProvider);
       if (mounted) context.go('/');
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -56,7 +56,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       ref.invalidate(familyProvider);
       if (mounted) context.go('/');
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

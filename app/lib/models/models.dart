@@ -153,10 +153,13 @@ class ConversationSummary {
         pinned: j['pinned'] == true,
         unreadCount: j['unreadCount'] as int? ?? 0,
         members: ((j['members'] as List?) ?? [])
-            .map((e) => FamilyMember.fromJson({
-                  ...Map<String, dynamic>.from(e as Map),
-                  'role': (e as Map)['role'] ?? 'member',
-                }))
+            .map((e) {
+              final member = Map<String, dynamic>.from(e as Map);
+              return FamilyMember.fromJson({
+                ...member,
+                'role': member['role'] ?? 'member',
+              });
+            })
             .toList(),
       );
 }

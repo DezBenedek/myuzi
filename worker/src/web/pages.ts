@@ -166,7 +166,7 @@ export function loginPage(error = ""): string {
           Látássérült segítség
         </label>
         <button type="submit">Kód küldése</button>
-        ${error ? `<p class="error">${error}</p>` : ""}
+        ${error ? `<p class="error">${escape(error)}</p>` : ""}
       </form>
     </div>
   `,
@@ -210,7 +210,7 @@ export function verifyPage(
         <input id="code" name="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" required autocomplete="one-time-code" autofocus />
         <button type="submit">Tovább</button>`
         }
-        ${error ? `<p class="error">${error}</p>` : ""}
+        ${error ? `<p class="error">${escape(error)}</p>` : ""}
       </form>
     </div>
   `,
@@ -305,7 +305,7 @@ export function accountPage(opts: {
                   <span class="pill">${m.role === "owner" ? "Tulajdonos" : "Tag"}</span>
                   ${
                     canRemove
-                      ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Eltávolítod ${escape(m.name)}-t a családból?')">
+                      ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Eltávolítod ezt a tagot a családból?')">
                           <input type="hidden" name="userId" value="${escape(m.id)}" />
                           <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto">Eltávolít</button>
                         </form>`
@@ -326,7 +326,7 @@ export function accountPage(opts: {
           <input id="inv" name="email" type="email" required placeholder="családtag@email.hu" />
           <button type="submit">Meghívó</button>
         </form>
-        ${inviteUrl ? `<p class="ok"><a href="${inviteUrl}">${inviteUrl}</a></p>` : ""}
+        ${inviteUrl ? `<p class="ok"><a href="${escape(inviteUrl)}">${escape(inviteUrl)}</a></p>` : ""}
       </div>
       ${
         isOwner
@@ -365,8 +365,8 @@ export function accountPage(opts: {
     `
     <h1 class="brand">MyÜzi</h1>
     <p class="sub">${escape(user.name)}</p>
-    ${message ? `<p class="ok">${message}</p>` : ""}
-    ${error ? `<p class="error">${error}</p>` : ""}
+    ${message ? `<p class="ok">${escape(message)}</p>` : ""}
+    ${error ? `<p class="error">${escape(error)}</p>` : ""}
     <div class="panel">
       <p><strong>${escape(user.name)}</strong><br/><span class="hint">${escape(user.email)}</span></p>
       <div class="row">
@@ -502,7 +502,7 @@ export function billingPage(opts: {
         ? `<p class="ok">A kisebb csomag a jelenlegi hónap végén lép életbe.</p>`
         : ""
     }
-    ${error ? `<p class="error">${error}</p>` : ""}
+    ${error ? `<p class="error">${escape(error)}</p>` : ""}
     <div class="panel">
       <p class="hint">A számlázási adatok nálunk maradnak (manuális számla). A Stripe nem kéri őket újra.</p>
       <form method="POST" action="/account/checkout">

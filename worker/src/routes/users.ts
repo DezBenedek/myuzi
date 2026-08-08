@@ -6,6 +6,16 @@ import { requireAuth } from "../middleware/auth";
 
 const users = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+async function canViewPrivateUserData(
+  db: D1Database,
+  viewerId: string,
+  targetId: string,
+): Promise<boolean> {
+  if (viewerId === targetId) return true;
+  const family = await getUserFamily(db, viewerId);
+  return !!family && (await isFamilyMember(db, family.id, targetId));
+}
+
 users.get("/me/qr", requireAuth, async (c) => {
   const me = c.get("user");
   const base = publicBaseUrl(c.req.url, c.env);
@@ -18,7 +28,11 @@ users.get("/me/qr", requireAuth, async (c) => {
 });
 
 users.get("/:id/avatar", requireAuth, async (c) => {
-  const user = await getUserById(c.env.DB, c.req.param("id"));
+  const targetId = c.req.param("id");
+  if (!(await canViewPrivateUserData(c.env.DB, c.get("userId"), targetId))) {
+    return c.json({ error: "Nincs hozzáférés" }, 403);
+  }
+  const user = await getUserById(c.env.DB, targetId);
   if (!user?.avatar_key) return c.json({ error: "Nincs profilkép" }, 404);
 
   const obj = await c.env.VOICE.get(user.avatar_key);
@@ -26,6 +40,10 @@ users.get("/:id/avatar", requireAuth, async (c) => {
 
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
+  const contentType = (headers.get("content-type") ?? "").toLowerCase();
+  if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+    return c.json({ error: "A profilkép formátuma nem támogatott" }, 415);
+  }
   headers.set("etag", obj.httpEtag);
   headers.set("Cache-Control", "private, max-age=3600");
   return new Response(obj.body, { headers });
@@ -47,7 +65,10 @@ users.get("/:id/card", requireAuth, async (c) => {
     user: {
       id: target.id,
       name: target.name,
-      avatarUrl: target.avatar_key ? `/api/users/${target.id}/avatar` : null,
+      avatarUrl:
+        sameFamily && target.avatar_key
+          ? `/api/users/${target.id}/avatar`
+          : null,
     },
     sameFamily,
     hasFamily: !!theirFamily,
@@ -57,7 +78,11 @@ users.get("/:id/card", requireAuth, async (c) => {
 });
 
 users.get("/:id", requireAuth, async (c) => {
-  const user = await getUserById(c.env.DB, c.req.param("id"));
+  const targetId = c.req.param("id");
+  if (!(await canViewPrivateUserData(c.env.DB, c.get("userId"), targetId))) {
+    return c.json({ error: "Nincs hozzáférés" }, 403);
+  }
+  const user = await getUserById(c.env.DB, targetId);
   if (!user) return c.json({ error: "Nem található" }, 404);
   return c.json({ user: publicUser(user) });
 });

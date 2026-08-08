@@ -5,6 +5,7 @@ import {
   addMinutes,
   hmacSha256,
   id,
+  isValidEmail,
   isExpired,
   normalizeEmail,
   sessionToken,
@@ -12,24 +13,35 @@ import {
   sixDigitCode,
   timingSafeEqual,
 } from "../lib/crypto";
-import { getUserByEmail, getUserById, publicUser } from "../lib/db";
+import { getUserByEmail, getUserById, pruneUserSessions, publicUser } from "../lib/db";
 import { loginCodeEmail, sendEmail } from "../lib/email";
 import { publicBaseUrl } from "../lib/urls";
+import { readLimitedBody, readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 auth.post("/start", async (c) => {
-  const body = await c.req.json<{
-    email?: string;
-    visionAssist?: boolean;
-  }>();
+  const body = await readLimitedJson<{ email?: string; visionAssist?: boolean }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
 
   const email = normalizeEmail(body.email ?? "");
   const visionAssist = !!body.visionAssist;
 
-  if (!email || !email.includes("@")) {
+  if (!isValidEmail(email)) {
     return c.json({ error: "Érvényes email kell" }, 400);
+  }
+
+  const recent = await c.env.DB.prepare(
+    `SELECT 1 AS ok FROM auth_codes
+     WHERE email = ? AND created_at > datetime('now', '-60 seconds')`,
+  )
+    .bind(email)
+    .first<{ ok: number }>();
+  if (recent) {
+    return c.json({ error: "Kérj új kódot egy perc múlva." }, 429);
   }
 
   const existing = await getUserByEmail(c.env.DB, email);
@@ -61,21 +73,24 @@ auth.post("/start", async (c) => {
 });
 
 auth.post("/verify", async (c) => {
-  const body = await c.req.json<{
+  const body = await readLimitedJson<{
     email?: string;
     code?: string;
     name?: string;
     visionAssist?: boolean;
-  }>();
+  }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
   const email = normalizeEmail(body.email ?? "");
-  const code = (body.code ?? "").trim();
-  const name = (body.name ?? "")
+  const code = typeof body.code === "string" ? body.code.trim() : "";
+  const name = (typeof body.name === "string" ? body.name : "")
     .trim()
     .replace(/[<>&\u0000-\u001f]/g, "")
     .trim()
     .slice(0, 80);
 
-  if (!email || !/^\d{6}$/.test(code)) {
+  if (!isValidEmail(email) || !/^\d{6}$/.test(code)) {
     return c.json({ error: "Hibás kód" }, 400);
   }
 
@@ -155,6 +170,7 @@ auth.post("/verify", async (c) => {
   )
     .bind(id("ses"), user.id, tokenHash, addDays(60))
     .run();
+  await pruneUserSessions(c.env.DB, user.id);
 
   const isWeb = (c.req.header("X-Client") ?? "").toLowerCase() === "web";
   if (isWeb) {
@@ -189,17 +205,30 @@ auth.post("/logout", requireAuth, async (c) => {
 });
 
 auth.patch("/me", requireAuth, async (c) => {
-  const body = await c.req.json<{ name?: string; email?: string; visionAssist?: boolean }>();
+  const body = await readLimitedJson<{
+    name?: string;
+    email?: string;
+    visionAssist?: boolean;
+  }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
   const user = c.get("user");
   // Strip control / markup characters — names appear in web UI.
-  const rawName = (body.name?.trim() || user.name).replace(/[<>&\u0000-\u001f]/g, "").trim();
+  const rawName = (
+    (typeof body.name === "string" ? body.name.trim() : "") || user.name
+  )
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .trim();
   const name = rawName.slice(0, 80);
   if (name.length < 2) return c.json({ error: "A név túl rövid" }, 400);
 
   let email = user.email;
   if (typeof body.email === "string" && body.email.trim()) {
     email = normalizeEmail(body.email);
-    if (!email.includes("@")) return c.json({ error: "Érvénytelen email" }, 400);
+    if (!isValidEmail(email)) {
+      return c.json({ error: "Érvénytelen email" }, 400);
+    }
     if (email !== user.email) {
       const taken = await getUserByEmail(c.env.DB, email);
       if (taken && taken.id !== user.id) {
@@ -221,16 +250,20 @@ auth.patch("/me", requireAuth, async (c) => {
   return c.json({ user: publicUser(updated!) });
 });
 
-const AVATAR_MAX = 3 * 1024 * 1024;
+const AVATAR_MAX = 1024 * 1024;
 
 auth.post("/avatar", requireAuth, async (c) => {
-  const contentType = c.req.header("Content-Type") ?? "image/jpeg";
-  if (!contentType.startsWith("image/")) {
-    return c.json({ error: "Csak képfájl lehet" }, 400);
+  const contentType = (c.req.header("Content-Type") ?? "image/jpeg")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+  if (!allowedTypes.has(contentType)) {
+    return c.json({ error: "JPG, PNG vagy WebP kép tölthető fel" }, 400);
   }
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0 || body.byteLength > AVATAR_MAX) {
-    return c.json({ error: "Érvénytelen kép (max 3 MB)" }, 400);
+  const body = await readLimitedBody(c.req.raw, AVATAR_MAX);
+  if (!body || body.byteLength === 0) {
+    return c.json({ error: "Érvénytelen kép (max 1 MB)" }, 400);
   }
 
   const userId = c.get("userId");

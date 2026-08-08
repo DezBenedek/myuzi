@@ -5,11 +5,14 @@ import {
   canAddMember,
   getFamily,
   getUserFamily,
+  isFamilyMember,
   leaveCurrentFamily,
   memberCount,
   publicFamily,
   publicUser,
+  removeFamilyMember,
 } from "../lib/db";
+import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const families = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -61,8 +64,15 @@ families.post("/", async (c) => {
     return c.json({ error: "Már van családod. Egy személy csak egy családhoz tartozhat." }, 409);
   }
 
-  const body = await c.req.json<{ name?: string }>();
-  const name = (body.name ?? "").trim();
+  const body = await readLimitedJson<{ name?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
+  const name = (typeof body.name === "string" ? body.name : "")
+    .trim()
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .slice(0, 80)
+    .trim();
   if (name.length < 2) return c.json({ error: "Adj nevet a családnak" }, 400);
 
   const familyId = id("fam");
@@ -89,8 +99,15 @@ families.patch("/:id", async (c) => {
     return c.json({ error: "Csak a tulajdonos módosíthatja" }, 403);
   }
 
-  const body = await c.req.json<{ name?: string }>();
-  const name = (body.name ?? "").trim();
+  const body = await readLimitedJson<{ name?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
+  const name = (typeof body.name === "string" ? body.name : "")
+    .trim()
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .slice(0, 80)
+    .trim();
   if (name.length < 2) return c.json({ error: "Érvénytelen név" }, 400);
 
   await c.env.DB.prepare(
@@ -117,11 +134,7 @@ families.delete("/:id/members/:userId", async (c) => {
     return c.json({ error: "A tulajdonos nem távolítható el" }, 400);
   }
 
-  await c.env.DB.prepare(
-    "DELETE FROM family_members WHERE family_id = ? AND user_id = ?",
-  )
-    .bind(familyId, targetUserId)
-    .run();
+  await removeFamilyMember(c.env.DB, familyId, targetUserId);
 
   return c.json({ ok: true });
 });
@@ -129,6 +142,9 @@ families.delete("/:id/members/:userId", async (c) => {
 families.get("/:id/capacity", async (c) => {
   const family = await getFamily(c.env.DB, c.req.param("id"));
   if (!family) return c.json({ error: "Nem található" }, 404);
+  if (!(await isFamilyMember(c.env.DB, family.id, c.get("userId")))) {
+    return c.json({ error: "Nincs jogosultság" }, 403);
+  }
   const count = await memberCount(c.env.DB, family.id);
   return c.json({
     count,

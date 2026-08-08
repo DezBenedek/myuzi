@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -7,6 +8,8 @@ void main() {
   testWidgets('MyÜzi app starts', (WidgetTester tester) async {
     await tester.pumpWidget(const ProviderScope(child: MyUziApp()));
     await tester.pump();
-    expect(find.text('MyÜzi'), findsWidgets);
+    // MaterialApp.router keeps the title in platform metadata; it is not a
+    // Text widget in the widget tree.
+    expect(find.byType(MaterialApp), findsOneWidget);
   });
 }

@@ -9,6 +9,7 @@ import {
   PLAN_FEATURES,
 } from "../lib/stripe";
 import { publicBaseUrl } from "../lib/urls";
+import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const billing = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -30,8 +31,8 @@ billing.get("/plans", (c) => {
 });
 
 billing.post("/checkout", requireAuth, async (c) => {
-  const body = await c.req.json<{ plan?: "family" | "family_plus" }>();
-  const plan = body.plan;
+  const body = await readLimitedJson<{ plan?: "family" | "family_plus" }>(c.req.raw);
+  const plan = body?.plan;
   if (plan !== "family" && plan !== "family_plus") {
     return c.json({ error: "Válassz csomagot" }, 400);
   }

@@ -40,6 +40,7 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
           );
       if (mounted) context.go('/');
     } on ApiException catch (e) {
+      if (!mounted) return;
       if (e.needsName && !_askName) {
         setState(() {
           _askName = true;
@@ -49,7 +50,7 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
         setState(() => _error = e.message);
       }
     } catch (_) {
-      setState(() => _error = 'Sikertelen belépés');
+      if (mounted) setState(() => _error = 'Sikertelen belépés');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

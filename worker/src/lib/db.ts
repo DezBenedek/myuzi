@@ -56,7 +56,12 @@ export async function isConversationMember(
 ): Promise<boolean> {
   const row = await db
     .prepare(
-      "SELECT 1 AS ok FROM conversation_members WHERE conversation_id = ? AND user_id = ?",
+      `SELECT 1 AS ok
+       FROM conversation_members cm
+       JOIN conversations c ON c.id = cm.conversation_id
+       JOIN family_members fm
+         ON fm.family_id = c.family_id AND fm.user_id = cm.user_id
+       WHERE cm.conversation_id = ? AND cm.user_id = ?`,
     )
     .bind(conversationId, userId)
     .first<{ ok: number }>();
@@ -114,11 +119,60 @@ export async function leaveCurrentFamily(
     return { ok: true };
   }
 
-  await db
-    .prepare("DELETE FROM family_members WHERE family_id = ? AND user_id = ?")
-    .bind(fam.id, userId)
-    .run();
+  await db.batch([
+    db
+      .prepare(
+        `DELETE FROM conversation_members
+         WHERE user_id = ?
+           AND conversation_id IN (
+             SELECT id FROM conversations WHERE family_id = ?
+           )`,
+      )
+      .bind(userId, fam.id),
+    db
+      .prepare("DELETE FROM family_members WHERE family_id = ? AND user_id = ?")
+      .bind(fam.id, userId),
+  ]);
   return { ok: true };
+}
+
+/** Remove a member and revoke their access to that family's conversations. */
+export async function removeFamilyMember(
+  db: D1Database,
+  familyId: string,
+  userId: string,
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `DELETE FROM conversation_members
+         WHERE user_id = ?
+           AND conversation_id IN (
+             SELECT id FROM conversations WHERE family_id = ?
+           )`,
+      )
+      .bind(userId, familyId),
+    db
+      .prepare("DELETE FROM family_members WHERE family_id = ? AND user_id = ?")
+      .bind(familyId, userId),
+  ]);
+}
+
+/** Keep abandoned login sessions from growing without a bound. */
+export async function pruneUserSessions(db: D1Database, userId: string): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM sessions
+       WHERE user_id = ?
+         AND id NOT IN (
+           SELECT id FROM sessions
+           WHERE user_id = ?
+           ORDER BY created_at DESC
+           LIMIT 5
+         )`,
+    )
+    .bind(userId, userId)
+    .run();
 }
 
 export { hasPaidPlan, voiceMaxMsForPlan };

@@ -57,6 +57,13 @@ export function isExpired(iso: string): boolean {
   return new Date(iso).getTime() < Date.now();
 }
 
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
+export function normalizeEmail(email: unknown): string {
+  return typeof email === "string" ? email.trim().toLowerCase() : "";
+}
+
+export function isValidEmail(email: string): boolean {
+  return (
+    email.length <= 254 &&
+    /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)
+  );
 }

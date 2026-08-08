@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import type { Env, Variables } from "../types";
-import { addDays, id, inviteToken, isExpired, normalizeEmail } from "../lib/crypto";
+import {
+  addDays,
+  id,
+  inviteToken,
+  isExpired,
+  isValidEmail,
+  normalizeEmail,
+} from "../lib/crypto";
 import {
   canAddMember,
   getFamily,
@@ -15,12 +22,16 @@ import {
 import { inviteEmail, sendEmail } from "../lib/email";
 import { sendPush } from "../lib/push";
 import { publicBaseUrl } from "../lib/urls";
+import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const invites = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 invites.post("/", requireAuth, async (c) => {
-  const body = await c.req.json<{ email?: string }>();
+  const body = await readLimitedJson<{ email?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ error: "Előbb hozz létre családot" }, 400);
   if (family.role !== "owner" && family.owner_id !== c.get("userId")) {
@@ -41,7 +52,7 @@ invites.post("/", requireAuth, async (c) => {
   }
 
   const email = body.email ? normalizeEmail(body.email) : null;
-  if (!email || !email.includes("@")) {
+  if (!email || !isValidEmail(email)) {
     return c.json({ error: "Meghívóhoz email cím kell" }, 400);
   }
   const token = inviteToken();
@@ -83,9 +94,14 @@ invites.post("/", requireAuth, async (c) => {
 
 /** Invite an existing user (e.g. via QR) into the caller's family. */
 invites.post("/user", requireAuth, async (c) => {
-  const body = await c.req.json<{ userId?: string }>();
-  const targetId = (body.userId ?? "").trim();
-  if (!targetId) return c.json({ error: "userId kell" }, 400);
+  const body = await readLimitedJson<{ userId?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
+  const targetId = typeof body.userId === "string" ? body.userId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{6,80}$/.test(targetId)) {
+    return c.json({ error: "Érvénytelen felhasználóazonosító" }, 400);
+  }
 
   const me = c.get("user");
   if (targetId === me.id) {
@@ -247,12 +263,8 @@ invites.post("/:token/accept", requireAuth, async (c) => {
   const user = c.get("user");
 
   let confirmLeave = false;
-  try {
-    const body = await c.req.json<{ confirmLeave?: boolean }>();
-    confirmLeave = body.confirmLeave === true;
-  } catch {
-    // empty body ok
-  }
+  const body = await readLimitedJson<{ confirmLeave?: boolean }>(c.req.raw);
+  confirmLeave = body?.confirmLeave === true;
 
   const invite = await c.env.DB.prepare("SELECT * FROM invites WHERE token = ?")
     .bind(token)
@@ -283,6 +295,19 @@ invites.post("/:token/accept", requireAuth, async (c) => {
     return c.json({ family: publicFamily({ ...family, role: existing.role }) });
   }
 
+  const count = await memberCount(c.env.DB, family.id);
+  if (!canAddMember(family, count)) {
+    return c.json(
+      {
+        error: hasPaidPlan(family.plan)
+          ? "A család megtelt"
+          : "Ingyenes csomag: max 3 fő. A tulajdonosnak elő kell fizetnie.",
+        softPaywall: true,
+      },
+      403,
+    );
+  }
+
   if (existing && existing.id !== family.id) {
     if (!confirmLeave) {
       return c.json(
@@ -297,19 +322,6 @@ invites.post("/:token/accept", requireAuth, async (c) => {
     }
     const left = await leaveCurrentFamily(c.env.DB, userId);
     if (!left.ok) return c.json({ error: left.error }, 400);
-  }
-
-  const count = await memberCount(c.env.DB, family.id);
-  if (!canAddMember(family, count)) {
-    return c.json(
-      {
-        error: hasPaidPlan(family.plan)
-          ? "A család megtelt"
-          : "Ingyenes csomag: max 3 fő. A tulajdonosnak elő kell fizetnie.",
-        softPaywall: true,
-      },
-      403,
-    );
   }
 
   if (!(await isFamilyMember(c.env.DB, family.id, userId))) {

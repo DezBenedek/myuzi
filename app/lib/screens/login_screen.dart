@@ -37,9 +37,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           );
       if (mounted) context.go('/verify');
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
     } catch (_) {
-      setState(() => _error = 'Nem sikerült elküldeni a kódot');
+      if (mounted) setState(() => _error = 'Nem sikerült elküldeni a kódot');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

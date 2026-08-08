@@ -41,11 +41,20 @@ const appCss = `
 .composer button { margin-top:0; width:auto; min-width:120px; }
 #recHint { color:var(--muted); font-weight:650; }
 .video-grid {
-  display:grid; grid-template-columns:1fr; gap:10px; min-height:50vh;
+  display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; min-height:50vh;
   background:#0b1a14; border-radius:16px; padding:10px; margin:12px 0;
 }
 .video-grid video, .video-grid .lk-tile {
   width:100%; min-height:220px; background:#12261c; border-radius:12px; object-fit:cover;
+}
+.video-grid .lk-tile { position:relative; overflow:hidden; border:1px solid transparent; }
+.video-grid .lk-tile.active { border-color:#3ddc97; box-shadow:0 0 0 2px #3ddc9744; }
+.video-grid .lk-tile .lk-name {
+  position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px;
+  background:#0009; color:#fff; font-size:.85rem;
+}
+@media (min-width: 760px) {
+  .video-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); }
 }
 .call-controls { display:flex; gap:10px; flex-wrap:wrap; }
 .call-controls button { width:auto; flex:1; min-width:110px; margin-top:0; }
@@ -61,15 +70,22 @@ function esc(s) {
 async function api(path, opts={}) {
   const headers = { 'X-Client': 'web', ...(opts.headers||{}) };
   if (opts.json !== undefined) headers['Content-Type'] = 'application/json';
-  const res = await fetch(path, {
-    credentials: 'include',
-    method: opts.method || (opts.json !== undefined || opts.body ? 'POST' : 'GET'),
-    headers,
-    body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || ('Hiba ' + res.status));
-  return body;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeout || (opts.body ? 60000 : 12000));
+  try {
+    const res = await fetch(path, {
+      credentials: 'include',
+      method: opts.method || (opts.json !== undefined || opts.body ? 'POST' : 'GET'),
+      headers,
+      body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
+      signal: controller.signal,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('Hiba ' + res.status));
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 `;
 
@@ -107,7 +123,10 @@ export function appInboxPage(user: UserRow): string {
       try { return new Date(iso).toLocaleString('hu-HU', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
       catch { return ''; }
     }
+    let loading = false;
     async function load() {
+      if (loading) return;
+      loading = true;
       const status = document.getElementById('status');
       const list = document.getElementById('list');
       try {
@@ -152,6 +171,8 @@ export function appInboxPage(user: UserRow): string {
         }
       } catch (e) {
         status.textContent = e.message || 'Betöltési hiba';
+      } finally {
+        loading = false;
       }
     }
     load();
@@ -192,6 +213,17 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
     let chunks = [];
     let recording = false;
     let startedAt = 0;
+    let recordTimer = null;
+    let recordedBytes = 0;
+    let recordTooLarge = false;
+    let sending = false;
+    let loadingMsgs = false;
+    let startingCall = false;
+    let currentAudio = null;
+    let currentAudioUrl = null;
+    let playGeneration = 0;
+    const MAX_RECORD_MS = 20 * 60 * 1000;
+    const MAX_RECORD_BYTES = 20 * 1024 * 1024;
     let chatTitle = document.getElementById('chatTitle').textContent || 'Beszélgetés';
 
     function fmtDur(ms) {
@@ -201,18 +233,57 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
       return m+':'+r;
     }
 
+    function stopAudio() {
+      playGeneration++;
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.src = '';
+        currentAudio = null;
+      }
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+      }
+    }
+
     async function playMsg(url) {
       if (!url || !url.startsWith('/api/messages/audio/')) throw new Error('Érvénytelen hang');
+      stopAudio();
+      const generation = playGeneration;
       const res = await fetch(url, { credentials: 'include', headers: { 'X-Client': 'web' } });
       if (!res.ok) throw new Error('Lejátszás sikertelen');
       const blob = await res.blob();
       const obj = URL.createObjectURL(blob);
+      if (generation !== playGeneration) {
+        URL.revokeObjectURL(obj);
+        return;
+      }
       const audio = new Audio(obj);
-      await audio.play();
-      await api('/api/messages/'+conversationId+'/read', { method:'POST', json: {} });
+      currentAudio = audio;
+      currentAudioUrl = obj;
+      const cleanup = () => {
+        if (currentAudio === audio) currentAudio = null;
+        if (currentAudioUrl === obj) currentAudioUrl = null;
+        URL.revokeObjectURL(obj);
+      };
+      audio.addEventListener('ended', cleanup, { once: true });
+      audio.addEventListener('error', cleanup, { once: true });
+      try {
+        await audio.play();
+        if (generation !== playGeneration) {
+          cleanup();
+          return;
+        }
+        await api('/api/messages/'+conversationId+'/read', { method:'POST', json: {} });
+      } catch (e) {
+        cleanup();
+        throw e;
+      }
     }
 
     async function loadMsgs() {
+      if (loadingMsgs) return;
+      loadingMsgs = true;
       const status = document.getElementById('status');
       const box = document.getElementById('msgs');
       try {
@@ -242,10 +313,14 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
         }
       } catch (e) {
         status.textContent = e.message || 'Hiba';
+      } finally {
+        loadingMsgs = false;
       }
     }
 
     async function startCall(type) {
+      if (startingCall) return;
+      startingCall = true;
       try {
         const data = await api('/api/calls/start', {
           method: 'POST',
@@ -253,14 +328,12 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
         });
         const call = data.call;
         // Token stays in memory / join API — never put JWT in the URL.
-        sessionStorage.setItem('myuzi_call_' + call.id, JSON.stringify({
-          callType: call.callType,
-          title: chatTitle,
-        }));
         location.href = '/app/call/' + encodeURIComponent(call.id) +
           '?type=' + encodeURIComponent(call.callType === 'video' ? 'video' : 'audio');
       } catch (e) {
         alert(e.message || 'Hívás indítása sikertelen');
+      } finally {
+        startingCall = false;
       }
     }
 
@@ -271,15 +344,45 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
     const recHint = document.getElementById('recHint');
     recBtn.onclick = async () => {
       if (!recording) {
+        if (sending) return;
+        let stream = null;
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           chunks = [];
+          recordedBytes = 0;
+          recordTooLarge = false;
           mediaRecorder = new MediaRecorder(stream);
-          mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+          mediaRecorder.ondataavailable = (e) => {
+            if (!e.data.size) return;
+            recordedBytes += e.data.size;
+            if (recordedBytes > MAX_RECORD_BYTES) {
+              recordTooLarge = true;
+              if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+              return;
+            }
+            chunks.push(e.data);
+          };
           mediaRecorder.onstop = async () => {
+            clearTimeout(recordTimer);
+            recordTimer = null;
             stream.getTracks().forEach(t => t.stop());
+            recording = false;
+            recBtn.textContent = 'Felvétel';
+            if (recordTooLarge) {
+              chunks = [];
+              recHint.textContent = 'A felvétel túl nagy (max. 20 MB)';
+              return;
+            }
             const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            chunks = [];
+            mediaRecorder = null;
+            if (!blob.size || blob.size > MAX_RECORD_BYTES) {
+              recHint.textContent = 'A felvétel túl nagy vagy üres';
+              return;
+            }
             const durationMs = Date.now() - startedAt;
+            sending = true;
+            recBtn.disabled = true;
             try {
               await api('/api/messages/'+conversationId, {
                 method: 'POST',
@@ -293,18 +396,27 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
               loadMsgs();
             } catch (e) {
               recHint.textContent = e.message || 'Küldés sikertelen';
+            } finally {
+              sending = false;
+              recBtn.disabled = false;
             }
           };
-          mediaRecorder.start();
+          mediaRecorder.start(1000);
+          recordTimer = setTimeout(() => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+          }, MAX_RECORD_MS);
           startedAt = Date.now();
           recording = true;
           recBtn.textContent = 'Stop + küldés';
           recHint.textContent = 'Felvétel…';
         } catch (e) {
+          if (stream) stream.getTracks().forEach(t => t.stop());
           alert('Mikrofon nem elérhető');
         }
       } else {
         recording = false;
+        clearTimeout(recordTimer);
+        recordTimer = null;
         recBtn.textContent = 'Felvétel';
         mediaRecorder && mediaRecorder.stop();
       }
@@ -349,11 +461,15 @@ export function appCallPage(
     let room = null;
     let micOn = true;
     let camOn = isVideo;
+    let ending = false;
+    const participantTiles = new Map();
+    const trackOwners = new Map();
+    const grid = document.getElementById('grid');
 
     function loadSdk(cb) {
       if (window.LivekitClient) return cb();
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.9.1/dist/livekit-client.umd.min.js';
+      s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.10.0/dist/livekit-client.umd.min.js';
       s.crossOrigin = 'anonymous';
       s.onload = cb;
       s.onerror = () => { document.getElementById('status').textContent = 'LiveKit SDK betöltése sikertelen'; };
@@ -361,20 +477,85 @@ export function appCallPage(
     }
     loadSdk(connect);
 
-    function attachTrack(track, container) {
+    function ensureTile(participant) {
+      const id = String(participant?.identity || '');
+      if (!id) return null;
+      let tile = participantTiles.get(id);
+      if (tile) return tile;
+      tile = document.createElement('div');
+      tile.className = 'lk-tile';
+      const media = document.createElement('div');
+      media.className = 'lk-media';
+      const name = document.createElement('span');
+      name.className = 'lk-name';
+      name.textContent = participant.name || id;
+      tile.appendChild(media);
+      tile.appendChild(name);
+      tile.media = media;
+      tile.tracks = new Map();
+      tile.identity = id;
+      participantTiles.set(id, tile);
+      return tile;
+    }
+
+    function renderGrid() {
+      if (!room) return;
+      const participants = [
+        room.localParticipant,
+        ...Array.from(room.remoteParticipants.values()),
+      ].filter(Boolean);
+      participants.sort((a, b) => {
+        if (a === room.localParticipant) return -1;
+        if (b === room.localParticipant) return 1;
+        return String(a.identity).localeCompare(String(b.identity));
+      });
+      const visible = participants.slice(0, 6);
+      grid.replaceChildren(...visible.map((p) => ensureTile(p)));
+      const visibleIds = new Set(visible.map((p) => String(p.identity)));
+      for (const [id, tile] of participantTiles) {
+        if (!visibleIds.has(id) && !room.remoteParticipants.get(id)) {
+          tile.tracks.forEach((node, track) => {
+            node.remove();
+            trackOwners.delete(track);
+          });
+          participantTiles.delete(id);
+        }
+      }
+    }
+
+    function setActiveSpeakers(speakers) {
+      const ids = new Set((speakers || []).map((p) => String(p.identity)));
+      participantTiles.forEach((tile) => tile.classList.toggle('active', ids.has(tile.identity)));
+    }
+
+    function attachTrack(track, participant) {
+      const tile = ensureTile(participant);
+      if (!tile) return;
+      trackOwners.set(track, tile.identity);
       if (track.kind === 'audio') {
         const a = track.attach();
         a.autoplay = true;
         a.playsInline = true;
-        container.appendChild(a);
-        return;
-      }
-      if (track.kind === 'video') {
+        tile.media.appendChild(a);
+        tile.tracks.set(track, a);
+      } else if (track.kind === 'video') {
         const v = track.attach();
         v.autoplay = true;
         v.playsInline = true;
-        container.appendChild(v);
+        v.muted = participant === room.localParticipant;
+        tile.media.appendChild(v);
+        tile.tracks.set(track, v);
       }
+      renderGrid();
+    }
+
+    function detachTrack(track, participant) {
+      const id = String(participant?.identity || trackOwners.get(track) || '');
+      const tile = participantTiles.get(id);
+      track.detach().forEach((node) => node.remove());
+      if (tile) tile.tracks.delete(track);
+      trackOwners.delete(track);
+      renderGrid();
     }
 
     async function connect() {
@@ -393,43 +574,66 @@ export function appCallPage(
         if (!livekitUrl || !token) throw new Error('Hiányzó hívási adatok');
 
         room = new Livekit.Room({ adaptiveStream: true, dynacast: true });
-        room.on(Livekit.RoomEvent.TrackSubscribed, (track) => {
-          const tile = document.createElement('div');
-          attachTrack(track, tile);
-          grid.appendChild(tile);
+        room.on(Livekit.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          attachTrack(track, participant || publication?.participant);
         });
-        room.on(Livekit.RoomEvent.TrackUnsubscribed, (track) => {
-          track.detach().forEach(n => n.remove());
+        room.on(Livekit.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+          detachTrack(track, participant || publication?.participant);
         });
-        room.on(Livekit.RoomEvent.Disconnected, () => { status.textContent = 'Lecsatlakozva'; });
+        room.on(Livekit.RoomEvent.LocalTrackPublished, (publication, participant) => {
+          if (publication?.track) attachTrack(publication.track, participant || room.localParticipant);
+        });
+        room.on(Livekit.RoomEvent.ParticipantConnected, renderGrid);
+        room.on(Livekit.RoomEvent.ParticipantDisconnected, renderGrid);
+        room.on(Livekit.RoomEvent.ActiveSpeakersChanged, setActiveSpeakers);
+        room.on(Livekit.RoomEvent.Disconnected, () => {
+          status.textContent = 'Lecsatlakozva';
+          renderGrid();
+        });
         await room.connect(livekitUrl, token);
         await room.localParticipant.setMicrophoneEnabled(true);
         if (isVideo) await room.localParticipant.setCameraEnabled(true);
         room.localParticipant.videoTrackPublications.forEach(pub => {
           if (pub.track) {
-            const tile = document.createElement('div');
-            attachTrack(pub.track, tile);
-            grid.appendChild(tile);
+            attachTrack(pub.track, room.localParticipant);
           }
         });
+        renderGrid();
         status.textContent = 'Kapcsolódva';
       } catch (e) {
+        try { await room?.disconnect(); } catch {}
+        room = null;
         status.textContent = e.message || 'Csatlakozási hiba';
       }
     }
 
+    window.addEventListener('pagehide', () => {
+      try { room?.disconnect(); } catch {}
+    });
+
     document.getElementById('micBtn').onclick = async () => {
       micOn = !micOn;
-      if (room) await room.localParticipant.setMicrophoneEnabled(micOn);
-      document.getElementById('micBtn').textContent = micOn ? 'Mikrofon' : 'Mikrofon ki';
+      try {
+        if (room) await room.localParticipant.setMicrophoneEnabled(micOn);
+        document.getElementById('micBtn').textContent = micOn ? 'Mikrofon' : 'Mikrofon ki';
+      } catch {
+        micOn = !micOn;
+      }
     };
     document.getElementById('camBtn').onclick = async () => {
       if (!isVideo) return;
       camOn = !camOn;
-      if (room) await room.localParticipant.setCameraEnabled(camOn);
-      document.getElementById('camBtn').textContent = camOn ? 'Kamera' : 'Kamera ki';
+      try {
+        if (room) await room.localParticipant.setCameraEnabled(camOn);
+        document.getElementById('camBtn').textContent = camOn ? 'Kamera' : 'Kamera ki';
+      } catch {
+        camOn = !camOn;
+      }
     };
     document.getElementById('endBtn').onclick = async () => {
+      if (ending) return;
+      ending = true;
+      document.getElementById('endBtn').disabled = true;
       try {
         await api('/api/calls/'+callId+'/end', { method:'POST', json: {} });
       } catch {}

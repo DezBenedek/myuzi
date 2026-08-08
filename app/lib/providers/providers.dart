@@ -52,9 +52,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final ApiClient _api;
 
   Future<void> _bootstrap() async {
-    await _api.loadSession();
-    final user = await _api.me();
-    state = AuthState(user: user, loading: false);
+    unawaited(LocalCache.trimCaches());
+    try {
+      await _api.loadSession();
+      final user = await _api.me();
+      state = AuthState(user: user, loading: false);
+    } catch (_) {
+      // A temporary network failure must not leave the router permanently
+      // stuck in its loading state.
+      state = const AuthState(loading: false);
+    }
   }
 
   Future<void> startLogin({
@@ -82,8 +89,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> refresh() async {
-    final user = await _api.me();
-    state = AuthState(user: user, loading: false);
+    try {
+      final user = await _api.me();
+      state = AuthState(user: user, loading: false);
+    } catch (_) {
+      // Keep the current session/UI on transient failures.
+    }
   }
 
   Future<void> setVisionAssist(bool value) async {

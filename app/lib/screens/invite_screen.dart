@@ -34,13 +34,21 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
     try {
       final data = await ref.read(apiProvider).getInvite(widget.token);
       final invite = data['invite'] as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() {
         _familyName = invite['familyName'] as String?;
         _loading = false;
       });
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'A meghívó betöltése sikertelen';
         _loading = false;
       });
     }
@@ -67,6 +75,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
         context.go('/');
       }
     } on ApiException catch (e) {
+      if (!mounted) return;
       if (e.needsLeaveConfirmation) {
         setState(() {
           _needsLeave = true;
@@ -81,6 +90,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
         _busy = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         _error = 'Csatlakozás sikertelen';
         _busy = false;
@@ -128,7 +138,7 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
         );
       },
     );
-    if (ok == true) await _accept(confirmLeave: true);
+    if (ok == true && mounted) await _accept(confirmLeave: true);
   }
 
   @override

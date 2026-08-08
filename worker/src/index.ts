@@ -13,6 +13,11 @@ import users from "./routes/users";
 import web from "./routes/web";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+const allowedApiOrigins = new Set([
+  "https://myuzi.uvmr.app",
+  "http://localhost:3000",
+  "http://localhost:5173",
+]);
 
 app.use("*", async (c, next) => {
   await next();
@@ -22,12 +27,34 @@ app.use("*", async (c, next) => {
   c.header("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
 });
 
+app.use("/api/*", async (c, next) => {
+  const declared = c.req.header("Content-Length");
+  if (declared) {
+    const length = Number(declared);
+    const contentType = (c.req.header("Content-Type") ?? "").toLowerCase();
+    const max =
+      contentType.startsWith("audio/") ? 20 * 1024 * 1024 :
+      contentType.startsWith("image/") ? 1024 * 1024 :
+      256 * 1024;
+    if (!Number.isFinite(length) || length < 0 || length > max) {
+      return c.json({ error: "A kérés túl nagy" }, 413);
+    }
+  }
+  await next();
+});
+
 app.use(
   "/api/*",
   cors({
-    origin: (origin) => origin || "*",
+    origin: (origin) => (allowedApiOrigins.has(origin) ? origin : null),
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "X-Client", "X-Duration-Ms"],
+    allowHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Client",
+      "X-Duration-Ms",
+      "X-Wave-Bars",
+    ],
     exposeHeaders: ["ETag"],
     maxAge: 86400,
   }),

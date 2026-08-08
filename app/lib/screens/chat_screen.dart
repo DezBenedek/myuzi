@@ -46,21 +46,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Timer? _maxRecordTimer;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<void>? _completeSub;
-  Timer? _progressTick;
   StreamSubscription<Amplitude>? _ampSub;
   final _waveCollector = WaveformCollector();
   bool _sending = false;
+  bool _recordStarting = false;
+  String? _recordPath;
+  bool _loadInFlight = false;
+  int _playRequest = 0;
+  bool _callStarting = false;
 
   int get _maxRecordMs {
     final fam = ref.read(familyProvider).asData?.value.family;
     return fam?.voiceMaxMs ?? 2 * 60 * 1000;
   }
 
+  int get _maxRecordBytes {
+    final plan = ref.read(familyProvider).asData?.value.family?.plan;
+    if (plan == 'family_plus') return 20 * 1024 * 1024;
+    if (plan == 'family') return 12 * 1024 * 1024;
+    return 8 * 1024 * 1024;
+  }
+
   @override
   void initState() {
     super.initState();
     _completeSub = _player.onPlayerComplete.listen((_) {
-      _progressTick?.cancel();
       if (mounted) {
         setState(() {
           _playingId = null;
@@ -84,25 +94,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() => _playProgress = next);
   }
 
-  void _startProgressTicker() {
-    _progressTick?.cancel();
-    _progressTick = Timer.periodic(const Duration(milliseconds: 50), (_) async {
-      if (!mounted || _playingId == null) return;
-      final pos = await _player.getCurrentPosition();
-      if (pos == null) return;
-      _onPlayPosition(pos);
-    });
+  Future<void> _deleteRecordingFile(String? path) async {
+    if (path == null) return;
+    try {
+      await File(path).delete();
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _playRequest++;
     _refresh?.cancel();
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
-    _progressTick?.cancel();
     _ampSub?.cancel();
     _posSub?.cancel();
     _completeSub?.cancel();
+    final recordingPath = _recordPath;
+    if (_recording) {
+      unawaited(() async {
+        try {
+          final path = await _recorder.stop();
+          await _deleteRecordingFile(path ?? recordingPath);
+        } catch (_) {
+          await _deleteRecordingFile(recordingPath);
+        }
+      }());
+    } else if (recordingPath != null) {
+      unawaited(_deleteRecordingFile(recordingPath));
+    }
     _scroll.dispose();
     _recorder.dispose();
     _player.dispose();
@@ -111,6 +131,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _boot() async {
     final cached = await LocalCache.loadMessages(widget.conversationId);
+    if (!mounted) return;
     final home = ref.read(homeNotifierProvider).asData?.value;
     final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
     if (mounted) {
@@ -143,6 +164,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _load({bool silent = false}) async {
+    if (_loadInFlight || !mounted) return;
+    _loadInFlight = true;
     if (!silent && _messages.isEmpty) {
       setState(() => _loading = true);
     }
@@ -158,7 +181,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .map((m) => heardIds.contains(m.id) ? m.copyWith(unread: false) : m)
           .toList();
       await LocalCache.saveMessages(widget.conversationId, messages);
-      unawaited(LocalCache.prefetchAudio(api, messages, keep: 8));
+      unawaited(LocalCache.prefetchAudio(api, messages, keep: 3));
 
       final home = ref.read(homeNotifierProvider).asData?.value;
       final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
@@ -176,6 +199,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } on ApiException catch (e) {
       if (mounted && !silent) showAppToast(context, e.message, error: true);
       if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (mounted && !silent) {
+        showAppToast(context, 'Üzenetek betöltése sikertelen', error: true);
+      }
+      debugPrint('message load error: $e');
+      if (mounted) setState(() => _loading = false);
+    } finally {
+      _loadInFlight = false;
     }
   }
 
@@ -201,54 +232,69 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _startRecording() async {
+    if (_recordStarting || _recording || _sending) return;
+    _recordStarting = true;
     if (!ref.read(connectivityProvider)) {
       showAppToast(context, 'Nincs internet', error: true);
+      _recordStarting = false;
       return;
     }
-    final ok = await _recorder.hasPermission();
-    if (!ok) {
-      showAppToast(context, 'Mikrofon engedély kell', error: true);
-      return;
+    try {
+      final ok = await _recorder.hasPermission();
+      if (!ok) {
+        if (mounted) showAppToast(context, 'Mikrofon engedély kell', error: true);
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final file = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      _recordPath = file;
+      _waveCollector.reset();
+      await _ampSub?.cancel();
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc),
+        path: file,
+      );
+      _ampSub = _recorder
+          .onAmplitudeChanged(const Duration(milliseconds: 80))
+          .listen((amp) {
+        _waveCollector.addDb(amp.current);
+        if (mounted) setState(() {});
+      });
+      _recordTick?.cancel();
+      _maxRecordTimer?.cancel();
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _recordStarted = DateTime.now();
+        _recordElapsed = Duration.zero;
+      });
+      _recordTick = Timer.periodic(const Duration(seconds: 1), (_) {
+        final started = _recordStarted;
+        if (started == null || !mounted) return;
+        setState(() => _recordElapsed = DateTime.now().difference(started));
+      });
+      _maxRecordTimer = Timer(Duration(milliseconds: _maxRecordMs), () {
+        if (_recording) unawaited(_stopAndSend());
+      });
+    } catch (e) {
+      await _deleteRecordingFile(_recordPath);
+      _recordPath = null;
+      if (mounted) showAppToast(context, 'Felvétel nem indítható', error: true);
+      debugPrint('record start error: $e');
+    } finally {
+      _recordStarting = false;
     }
-    final dir = await getTemporaryDirectory();
-    final file = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    _waveCollector.reset();
-    await _ampSub?.cancel();
-    await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.aacLc),
-      path: file,
-    );
-    _ampSub = _recorder
-        .onAmplitudeChanged(const Duration(milliseconds: 80))
-        .listen((amp) {
-      _waveCollector.addDb(amp.current);
-      if (mounted) setState(() {});
-    });
-    _recordTick?.cancel();
-    _maxRecordTimer?.cancel();
-    setState(() {
-      _recording = true;
-      _recordStarted = DateTime.now();
-      _recordElapsed = Duration.zero;
-    });
-    _recordTick = Timer.periodic(const Duration(seconds: 1), (_) {
-      final started = _recordStarted;
-      if (started == null || !mounted) return;
-      setState(() => _recordElapsed = DateTime.now().difference(started));
-    });
-    _maxRecordTimer = Timer(Duration(milliseconds: _maxRecordMs), () {
-      if (_recording) _stopAndSend();
-    });
   }
 
   Future<void> _stopAndSend() async {
-    if (!_recording || _sending) return;
+    if (!_recording || _sending || _recordStarting) return;
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
     await _ampSub?.cancel();
     _ampSub = null;
+    if (!mounted) return;
     final waveBars = _waveCollector.toBars();
-    final path = await _recorder.stop();
+    String? path;
     final started = _recordStarted;
     final maxMs = _maxRecordMs;
     setState(() {
@@ -256,14 +302,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _recordStarted = null;
       _sending = true;
     });
-    if (path == null || started == null) {
-      setState(() => _sending = false);
-      return;
-    }
-    var duration = DateTime.now().difference(started).inMilliseconds;
-    if (duration > maxMs) duration = maxMs;
-    final bytes = await File(path).readAsBytes();
     try {
+      path = await _recorder.stop();
+      if (path == null || started == null) return;
+
+      final file = File(path);
+      if (!await file.exists()) return;
+      final maxUploadBytes = _maxRecordBytes;
+      final fileSize = await file.length();
+      if (fileSize == 0 || fileSize > maxUploadBytes) {
+        if (mounted) {
+          showAppToast(context, 'A hangfájl túl nagy vagy üres', error: true);
+        }
+        return;
+      }
+
+      var duration = DateTime.now().difference(started).inMilliseconds;
+      if (duration > maxMs) duration = maxMs;
+      final bytes = await file.readAsBytes();
       final msg = await ref.read(apiProvider).uploadVoice(
             conversationId: widget.conversationId,
             bytes: bytes,
@@ -291,7 +347,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       unawaited(_load(silent: true));
     } on ApiException catch (e) {
       if (mounted) showAppToast(context, e.message, error: true);
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Hangüzenet küldése sikertelen', error: true);
+      debugPrint('record send error: $e');
     } finally {
+      await _deleteRecordingFile(path ?? _recordPath);
+      _recordPath = null;
       if (mounted) setState(() => _sending = false);
     }
   }
@@ -305,9 +366,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _play(VoiceMessage msg) async {
+    final request = ++_playRequest;
     if (_playingId == msg.id) {
-      _progressTick?.cancel();
       await _player.stop();
+      if (!mounted || request != _playRequest) return;
       setState(() {
         _playingId = null;
         _playProgress = 0;
@@ -320,6 +382,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       File file = await LocalCache.audioFile(msg.id);
       if (!await file.exists()) {
         if (!ref.read(connectivityProvider)) {
+          if (!mounted) return;
           showAppToast(context, 'Nincs internet', error: true);
           return;
         }
@@ -327,8 +390,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         await LocalCache.putAudio(msg.id, bytes);
         file = await LocalCache.audioFile(msg.id);
       }
+      if (!mounted || request != _playRequest) return;
 
-      final meId = ref.read(authProvider).user!.id;
+      final me = ref.read(authProvider).user;
+      if (me == null) return;
+      final meId = me.id;
       if (msg.senderId != meId && msg.unread) {
         // Clear yellow for this message and older ones.
         setState(() {
@@ -357,20 +423,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _playingDurationMs = fallbackMs;
       });
       await _player.stop();
+      if (!mounted || request != _playRequest) return;
       await _player.play(DeviceFileSource(file.path));
-      _startProgressTicker();
 
       // Prefer real media duration once (not on every position tick).
       final mediaDur = await _player.getDuration();
       if (mounted &&
+          request == _playRequest &&
           _playingId == msg.id &&
           mediaDur != null &&
           mediaDur.inMilliseconds > 200) {
         setState(() => _playingDurationMs = mediaDur.inMilliseconds);
       }
     } on ApiException catch (e) {
-      _progressTick?.cancel();
-      if (mounted) showAppToast(context, e.message, error: true);
+      if (mounted && request == _playRequest) {
+        showAppToast(context, e.message, error: true);
+      }
+    } catch (e) {
+      if (mounted && request == _playRequest) {
+        showAppToast(context, 'Lejátszás sikertelen', error: true);
+      }
+      debugPrint('audio playback error: $e');
     }
   }
 
@@ -451,7 +524,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
       },
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
 
     final prev = _messages;
     final next = _messages.where((m) => m.id != msg.id).toList();
@@ -482,10 +555,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _call(String type) async {
+    if (_callStarting) return;
     if (!ref.read(connectivityProvider)) {
       showAppToast(context, 'Nincs internet', error: true);
       return;
     }
+    _callStarting = true;
     try {
       final session = await ref.read(apiProvider).startCall(
             conversationId: widget.conversationId,
@@ -501,6 +576,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       showAppToast(context, e.message, error: true);
+    } finally {
+      _callStarting = false;
     }
   }
 

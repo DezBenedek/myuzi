@@ -64,6 +64,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   String? _candidateId;
   DateTime? _candidateSince;
   Timer? _speakerEvalTimer;
+  Timer? _speakerUiTimer;
+  bool _closing = false;
 
   bool get _isVideo => widget.callType == 'video';
 
@@ -81,14 +83,19 @@ class _CallScreenState extends ConsumerState<CallScreen> {
           dynacast: true,
           defaultAudioCaptureOptions: AudioCaptureOptions(),
           defaultCameraCaptureOptions: CameraCaptureOptions(
-            maxFrameRate: 30,
+            maxFrameRate: 20,
+            params: VideoParametersPresets.h360_169,
           ),
         ),
       );
+      _room = room;
       _listener = room.createListener();
       _listener!
         ..on<RoomDisconnectedEvent>((_) {
-          if (mounted) Navigator.of(context).maybePop();
+          if (mounted && !_closing) {
+            _closing = true;
+            Navigator.of(context).maybePop();
+          }
         })
         ..on<ParticipantConnectedEvent>((_) {
           if (mounted) setState(() {});
@@ -99,6 +106,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
             _focusSince = null;
             _candidateId = null;
             _candidateSince = null;
+            _speakerEvalTimer?.cancel();
           }
           if (mounted) setState(() {});
         })
@@ -118,13 +126,26 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
       await room.connect(widget.livekitUrl, widget.token);
 
+      if (!mounted || _closing) {
+        await room.disconnect();
+        return;
+      }
       await room.localParticipant?.setMicrophoneEnabled(true);
       if (_isVideo) {
+        if (!mounted || _closing) {
+          await room.disconnect();
+          return;
+        }
         await room.localParticipant?.setCameraEnabled(true);
         _camOn = true;
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        try {
+          await room.disconnect();
+        } catch (_) {}
+        return;
+      }
       setState(() {
         _room = room;
         _local = room.localParticipant;
@@ -133,6 +154,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         _focusSince = DateTime.now();
       });
     } catch (e) {
+      try {
+        await _listener?.dispose();
+        await _room?.disconnect();
+      } catch (_) {}
       if (mounted) {
         setState(() {
           _connecting = false;
@@ -148,8 +173,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
     final speakers = event.speakers;
     if (speakers.isEmpty) {
-      // Keep focus; refresh speaking rings (everyone quiet).
-      setState(() {});
+      // Keep focus; clear a candidate that stopped speaking.
+      _candidateId = null;
+      _candidateSince = null;
+      _speakerEvalTimer?.cancel();
+      _scheduleSpeakerUiRefresh();
       return;
     }
 
@@ -169,10 +197,10 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     }
 
     if (topId == _focusId) {
-      setState(() {
-        _candidateId = null;
-        _candidateSince = null;
-      });
+      _candidateId = null;
+      _candidateSince = null;
+      _speakerEvalTimer?.cancel();
+      _scheduleSpeakerUiRefresh();
       return;
     }
 
@@ -188,7 +216,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
     final focusSilent = focusP == null || !focusP.isSpeaking;
     if (!focusSilent && topLevel < focusLevel + _levelMargin) {
-      setState(() {}); // speaking rings only
+      _scheduleSpeakerUiRefresh();
       return;
     }
 
@@ -198,7 +226,14 @@ class _CallScreenState extends ConsumerState<CallScreen> {
       _speakerEvalTimer?.cancel();
       _speakerEvalTimer = Timer(_promoteAfter, _tryPromoteCandidate);
     }
-    setState(() {});
+    _scheduleSpeakerUiRefresh();
+  }
+
+  void _scheduleSpeakerUiRefresh() {
+    if (_speakerUiTimer?.isActive ?? false) return;
+    _speakerUiTimer = Timer(const Duration(milliseconds: 100), () {
+      if (mounted) setState(() {});
+    });
   }
 
   void _tryPromoteCandidate() {
@@ -210,6 +245,12 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
     final now = DateTime.now();
     if (now.difference(since) < _promoteAfter) return;
+    final candidate = _room?.getParticipantByIdentity(cand);
+    if (candidate == null || !candidate.isSpeaking) {
+      _candidateId = null;
+      _candidateSince = null;
+      return;
+    }
     if (focusSince != null && now.difference(focusSince) < _holdMin) {
       final wait = _holdMin - now.difference(focusSince);
       _speakerEvalTimer?.cancel();
@@ -227,21 +268,38 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   Future<void> _leaveOnly() async {
+    if (_closing) return;
+    _closing = true;
     await _cleanupMedia();
-    await _room?.disconnect();
+    await _disconnectRoom();
     if (mounted) Navigator.of(context).maybePop();
   }
 
   Future<void> _endForEveryone() async {
+    if (_closing) return;
+    _closing = true;
     try {
       await ref.read(apiProvider).endCall(widget.callId);
     } catch (_) {}
     await _cleanupMedia();
-    await _room?.disconnect();
+    await _disconnectRoom();
     if (mounted) Navigator.of(context).maybePop();
   }
 
   Future<void> _cleanupMedia() async {
+    try {
+      await _local?.setMicrophoneEnabled(false);
+    } catch (_) {}
+    if (_camOn) {
+      try {
+        await _local?.setCameraEnabled(false);
+      } catch (_) {}
+    }
+    if (_screenShare) {
+      try {
+        await _local?.setScreenShareEnabled(false);
+      } catch (_) {}
+    }
     if (_screenShare && !kIsWeb && Platform.isAndroid) {
       try {
         if (FlutterBackground.isBackgroundExecutionEnabled) {
@@ -251,7 +309,21 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     }
   }
 
+  Future<void> _disconnectRoom() async {
+    final listener = _listener;
+    _listener = null;
+    try {
+      await listener?.dispose();
+    } catch (_) {}
+    final room = _room;
+    _room = null;
+    try {
+      await room?.disconnect();
+    } catch (_) {}
+  }
+
   Future<void> _onHangUpPressed() async {
+    if (_closing || !mounted) return;
     final remotes = _room?.remoteParticipants.length ?? 0;
     if (remotes == 0) {
       await _endForEveryone();
@@ -313,15 +385,21 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   Future<void> _toggleMic() async {
+    if (_closing) return;
     final next = !_micOn;
-    await _local?.setMicrophoneEnabled(next);
-    setState(() => _micOn = next);
+    try {
+      await _local?.setMicrophoneEnabled(next);
+      if (mounted && !_closing) setState(() => _micOn = next);
+    } catch (_) {}
   }
 
   Future<void> _toggleCam() async {
+    if (_closing) return;
     final next = !_camOn;
-    await _local?.setCameraEnabled(next);
-    setState(() => _camOn = next);
+    try {
+      await _local?.setCameraEnabled(next);
+      if (mounted && !_closing) setState(() => _camOn = next);
+    } catch (_) {}
   }
 
   Future<void> _switchCam() async {
@@ -337,7 +415,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         orElse: () => devices.first,
       );
       await room.setVideoInputDevice(next);
-      setState(() {});
+      if (mounted && !_closing) setState(() {});
     } catch (e) {
       debugPrint('switch cam: $e');
     }
@@ -345,7 +423,6 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   Future<bool> _enableAndroidScreenShareService() async {
     try {
-      var hasPermissions = await FlutterBackground.hasPermissions;
       const androidConfig = FlutterBackgroundAndroidConfig(
         notificationTitle: 'MyÜzi kijelzőmegosztás',
         notificationText: 'A hívás megosztja a kijelződet.',
@@ -353,7 +430,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         notificationIcon:
             AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
       );
-      hasPermissions =
+      final hasPermissions =
           await FlutterBackground.initialize(androidConfig: androidConfig);
       if (hasPermissions && !FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.enableBackgroundExecution();
@@ -366,7 +443,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   }
 
   Future<void> _toggleScreen() async {
-    if (kIsWeb) return;
+    if (kIsWeb || _closing) return;
     final next = !_screenShare;
     try {
       if (next && !kIsWeb && Platform.isAndroid) {
@@ -390,7 +467,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
           }
         } catch (_) {}
       }
-      setState(() => _screenShare = next);
+      if (mounted && !_closing) setState(() => _screenShare = next);
     } catch (e) {
       debugPrint('screen share: $e');
       if (mounted) {
@@ -402,9 +479,28 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   @override
   void dispose() {
+    _closing = true;
     _speakerEvalTimer?.cancel();
-    _listener?.dispose();
-    unawaited(_room?.disconnect() ?? Future.value());
+    _speakerUiTimer?.cancel();
+    final listener = _listener;
+    final room = _room;
+    _listener = null;
+    _room = null;
+    if (_screenShare && !kIsWeb && Platform.isAndroid) {
+      unawaited(() async {
+        try {
+          await FlutterBackground.disableBackgroundExecution();
+        } catch (_) {}
+      }());
+    }
+    unawaited(() async {
+      try {
+        await listener?.dispose();
+      } catch (_) {}
+      try {
+        await room?.disconnect();
+      } catch (_) {}
+    }());
     super.dispose();
   }
 
@@ -457,8 +553,8 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     final focusId =
         _focusId ?? (tiles.isNotEmpty ? tiles.first.identity : null);
 
-    // Always keep tile positions stable. Active speaker = border/glow only
-    // (no layout jump). Phone uses 2-col grid; desktop/wide up to 3-col.
+    // Always keep desktop tile positions stable. On phones the focused
+    // speaker gets the spotlight while the participant strip stays ordered.
     final useWideGrid = _isWide;
 
     return Scaffold(
@@ -505,12 +601,18 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                                     ?.copyWith(color: Colors.white),
                               ),
                             )
-                          : _ParticipantGrid(
-                              tiles: tiles,
-                              focusId: focusId,
-                              showVideo: _isVideo || _camOn,
-                              wide: useWideGrid,
-                            ),
+                          : useWideGrid
+                              ? _ParticipantGrid(
+                                  tiles: tiles,
+                                  focusId: focusId,
+                                  showVideo: _isVideo || _camOn,
+                                  wide: true,
+                                )
+                              : _MobileSpotlight(
+                                  tiles: tiles,
+                                  focusId: focusId,
+                                  showVideo: _isVideo || _camOn,
+                                ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
@@ -653,18 +755,84 @@ class _ParticipantGrid extends StatelessWidget {
   }
 }
 
+class _MobileSpotlight extends StatelessWidget {
+  const _MobileSpotlight({
+    required this.tiles,
+    required this.focusId,
+    required this.showVideo,
+  });
+
+  final List<_CallTile> tiles;
+  final String? focusId;
+  final bool showVideo;
+
+  @override
+  Widget build(BuildContext context) {
+    var focus = tiles.first;
+    for (final tile in tiles) {
+      if (tile.identity == focusId) {
+        focus = tile;
+        break;
+      }
+    }
+    // The strip keeps the stable identity order; only the large view changes.
+    final strip = tiles.where((tile) => tile.identity != focus.identity).toList();
+
+    return Column(
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: _ParticipantPane(
+              tile: focus,
+              focused: true,
+              showVideo: showVideo,
+              large: true,
+            ),
+          ),
+        ),
+        if (strip.isNotEmpty)
+          SizedBox(
+            height: 112,
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              scrollDirection: Axis.horizontal,
+              itemCount: strip.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (_, index) {
+                final tile = strip[index];
+                return SizedBox(
+                  width: 96,
+                  child: _ParticipantPane(
+                    tile: tile,
+                    focused: false,
+                    showVideo: showVideo,
+                    large: false,
+                    compact: true,
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _ParticipantPane extends StatelessWidget {
   const _ParticipantPane({
     required this.tile,
     required this.focused,
     required this.showVideo,
     required this.large,
+    this.compact = false,
   });
 
   final _CallTile tile;
   final bool focused;
   final bool showVideo;
   final bool large;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -680,7 +848,7 @@ class _ParticipantPane extends StatelessWidget {
       curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
         color: const Color(0xFF15241C),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(compact ? 14 : 18),
         border: Border.all(color: borderColor, width: borderWidth),
         boxShadow: focused
             ? [
@@ -699,6 +867,7 @@ class _ParticipantPane extends StatelessWidget {
           if (showVideo && tile.camera != null)
             VideoTrackRenderer(
               tile.camera!,
+              key: ValueKey(tile.identity),
               fit: VideoViewFit.cover,
             )
           else
@@ -734,10 +903,10 @@ class _ParticipantPane extends StatelessWidget {
                     tile.isLocal ? '${tile.name} (te)' : tile.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
-                      fontSize: 13,
+                      fontSize: compact ? 11 : 13,
                       shadows: [
                         Shadow(blurRadius: 6, color: Colors.black54),
                       ],

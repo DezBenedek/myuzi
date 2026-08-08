@@ -26,12 +26,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _incomingCallId;
   int? _lastUnreadTotal;
   bool _sheetOpen = false;
+  bool _tickInFlight = false;
+  bool _incomingAction = false;
   final _seenInviteTokens = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _tick());
+    _poll = Timer.periodic(const Duration(seconds: 6), (_) => _tick());
     WidgetsBinding.instance.addPostFrameCallback((_) => _tick());
   }
 
@@ -43,7 +45,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _tick() async {
-    await Future.wait([_checkIncoming(), _refreshUnread(), _checkInviteInbox()]);
+    if (_tickInFlight || !mounted) return;
+    _tickInFlight = true;
+    try {
+      await Future.wait([_checkIncoming(), _refreshUnread(), _checkInviteInbox()]);
+    } finally {
+      _tickInFlight = false;
+    }
   }
 
   Future<void> _checkInviteInbox() async {
@@ -55,8 +63,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       for (final inv in invites) {
         final token = inv['token'] as String?;
         if (token == null || _seenInviteTokens.contains(token)) continue;
+        if (_seenInviteTokens.length >= 100) _seenInviteTokens.clear();
         _seenInviteTokens.add(token);
         if (!mounted) return;
+        _sheetOpen = true;
         final go = await showModalBottomSheet<bool>(
           context: context,
           showDragHandle: true,
@@ -104,6 +114,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             );
           },
         );
+        _sheetOpen = false;
         if (go == true && mounted) context.push('/invite/$token');
         return;
       }
@@ -130,6 +141,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ? 'Új hangüzeneted érkezett'
               : '${tip.lastSenderName ?? tip.name} hangüzenetet küldött',
         );
+        if (!mounted) return;
       }
       // Always push into UI from this fetch (cache-first home, live updates).
       ref.read(homeNotifierProvider.notifier).applyData(data);
@@ -142,7 +154,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!auth.isLoggedIn) return;
     try {
       final calls = await ref.read(apiProvider).activeCalls();
-      final me = auth.user!.id;
+      final me = ref.read(authProvider).user?.id;
+      if (!mounted || me == null) return;
       for (final call in calls) {
         if (call['status'] == 'ringing' && call['initiated_by'] != me) {
           if (mounted && _incomingCallId != call['id']) {
@@ -184,18 +197,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 label: 'Fogadás',
                 icon: Icons.call,
                 onPressed: () async {
+                  if (_incomingAction) return;
+                  _incomingAction = true;
                   await AppNotify.stopCallRingtone();
                   if (ctx.mounted) Navigator.pop(ctx);
                   _sheetOpen = false;
-                  final session =
-                      await ref.read(apiProvider).joinCall(call['id'] as String);
-                  if (!mounted) return;
-                  context.push('/call/${session.id}', extra: {
-                    'livekitUrl': session.livekitUrl,
-                    'token': session.token,
-                    'callType': session.callType,
-                    'title': 'Hívás',
-                  });
+                  try {
+                    final session =
+                        await ref.read(apiProvider).joinCall(call['id'] as String);
+                    if (!mounted) return;
+                    context.push('/call/${session.id}', extra: {
+                      'livekitUrl': session.livekitUrl,
+                      'token': session.token,
+                      'callType': session.callType,
+                      'title': 'Hívás',
+                    });
+                  } on ApiException catch (e) {
+                    if (mounted) showAppToast(context, e.message, error: true);
+                  } catch (_) {
+                    if (mounted) {
+                      showAppToast(context, 'A hívás nem érhető el', error: true);
+                    }
+                  } finally {
+                    _incomingAction = false;
+                  }
                 },
               ),
               const SizedBox(height: 10),
@@ -205,11 +230,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 outlined: true,
                 danger: true,
                 onPressed: () async {
+                  if (_incomingAction) return;
+                  _incomingAction = true;
                   await AppNotify.stopCallRingtone();
                   if (ctx.mounted) Navigator.pop(ctx);
                   _sheetOpen = false;
-                  await ref.read(apiProvider).endCall(call['id'] as String);
+                  try {
+                    await ref.read(apiProvider).endCall(call['id'] as String);
+                  } catch (_) {}
                   if (mounted) setState(() => _incomingCallId = null);
+                  _incomingAction = false;
                 },
               ),
             ],
@@ -218,6 +248,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       },
     ).whenComplete(() {
       _sheetOpen = false;
+      _incomingAction = false;
       AppNotify.stopCallRingtone();
     });
   }
@@ -226,9 +257,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       if (c.pinned) {
         await ref.read(apiProvider).unpinConversation(c.id);
+        if (!mounted) return;
         showAppToast(context, 'Kitűzés levéve');
       } else {
         await ref.read(apiProvider).pinConversation(c.id);
+        if (!mounted) return;
         showAppToast(context, 'Kitűzve');
       }
       await ref.read(homeNotifierProvider.notifier).refresh(silent: true);
@@ -490,6 +523,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
     if (email == null || email.isEmpty) return;
     if (!ref.read(connectivityProvider)) {
+      if (!mounted) return;
       showAppToast(context, 'Nincs internet', error: true);
       return;
     }

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env, Variables } from "../types";
-import { addDays, id, inviteToken, normalizeEmail } from "../lib/crypto";
+import { addDays, id, inviteToken, isValidEmail, normalizeEmail } from "../lib/crypto";
 import {
   canAddMember,
   getUserByEmail,
@@ -12,6 +12,7 @@ import {
 } from "../lib/db";
 import { inviteEmail, sendEmail } from "../lib/email";
 import { publicBaseUrl } from "../lib/urls";
+import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const conversations = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -105,7 +106,8 @@ conversations.get("/", async (c) => {
      ORDER BY
        CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,
        COALESCE(cm.pinned_at, '') DESC,
-       COALESCE(last_message_at, c.created_at) DESC`,
+       COALESCE(last_message_at, c.created_at) DESC
+     LIMIT 100`,
   )
     .bind(userId, userId, family.id)
     .all<{
@@ -124,20 +126,41 @@ conversations.get("/", async (c) => {
       unread_count: number;
     }>();
 
-  const list = [];
-  for (const row of rows.results ?? []) {
-    const members = await c.env.DB.prepare(
-      `SELECT u.id, u.name, u.email, u.avatar_key
+  const conversationRows = rows.results ?? [];
+  const membersByConversation = new Map<
+    string,
+    Array<{ id: string; name: string; email: string; avatar_key: string | null }>
+  >();
+  if (conversationRows.length > 0) {
+    const placeholders = conversationRows.map(() => "?").join(", ");
+    const memberRows = await c.env.DB.prepare(
+      `SELECT cm.conversation_id, u.id, u.name, u.email, u.avatar_key
        FROM conversation_members cm JOIN users u ON u.id = cm.user_id
-       WHERE cm.conversation_id = ?`,
+       WHERE cm.conversation_id IN (${placeholders})`,
     )
-      .bind(row.id)
-      .all<{ id: string; name: string; email: string; avatar_key: string | null }>();
+      .bind(...conversationRows.map((row) => row.id))
+      .all<{
+        conversation_id: string;
+        id: string;
+        name: string;
+        email: string;
+        avatar_key: string | null;
+      }>();
+    for (const member of memberRows.results ?? []) {
+      const list = membersByConversation.get(member.conversation_id) ?? [];
+      list.push(member);
+      membersByConversation.set(member.conversation_id, list);
+    }
+  }
+
+  const list = [];
+  for (const row of conversationRows) {
+    const members = membersByConversation.get(row.id) ?? [];
 
     let title = row.name;
     let avatarUrl: string | null = null;
     if (row.type === "direct") {
-      const other = (members.results ?? []).find((m) => m.id !== userId);
+      const other = members.find((m) => m.id !== userId);
       title = other?.name ?? "Beszélgetés";
       avatarUrl = other?.avatar_key ? `/api/users/${other.id}/avatar` : null;
     }
@@ -153,7 +176,7 @@ conversations.get("/", async (c) => {
       pinned: !!row.pinned_at,
       pinnedAt: row.pinned_at,
       avatarUrl,
-      members: (members.results ?? []).map((m) => ({
+      members: members.map((m) => ({
         id: m.id,
         name: m.name,
         email: m.email,
@@ -166,12 +189,20 @@ conversations.get("/", async (c) => {
 });
 
 conversations.post("/direct", async (c) => {
-  const body = await c.req.json<{ userId?: string }>();
-  const otherId = body.userId;
-  if (!otherId) return c.json({ error: "userId kell" }, 400);
+  const body = await readLimitedJson<{ userId?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
+  const otherId = typeof body.userId === "string" ? body.userId.trim() : "";
+  if (!/^[A-Za-z0-9_-]{6,80}$/.test(otherId)) {
+    return c.json({ error: "Érvénytelen felhasználóazonosító" }, 400);
+  }
 
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ error: "Nincs család" }, 400);
+  if (otherId === c.get("userId")) {
+    return c.json({ error: "Saját magaddal nem nyithatsz beszélgetést" }, 400);
+  }
   if (!(await isFamilyMember(c.env.DB, family.id, otherId))) {
     return c.json({ error: "Nem családtag" }, 403);
   }
@@ -187,9 +218,14 @@ conversations.post("/direct", async (c) => {
 
 /** Open chat by email if already family; otherwise create invite (paid). */
 conversations.post("/direct-by-email", async (c) => {
-  const body = await c.req.json<{ email?: string }>();
+  const body = await readLimitedJson<{ email?: string }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
   const email = normalizeEmail(body.email ?? "");
-  if (!email.includes("@")) return c.json({ error: "Érvényes email kell" }, 400);
+  if (!isValidEmail(email)) {
+    return c.json({ error: "Érvényes email kell" }, 400);
+  }
 
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ error: "Nincs család" }, 400);
@@ -265,10 +301,24 @@ conversations.post("/direct-by-email", async (c) => {
 });
 
 conversations.post("/group", async (c) => {
-  const body = await c.req.json<{ name?: string; memberIds?: string[] }>();
-  const name = (body.name ?? "").trim();
-  const memberIds = body.memberIds ?? [];
-  if (name.length < 2) return c.json({ error: "Adj nevet a csoportnak" }, 400);
+  const body = await readLimitedJson<{ name?: string; memberIds?: string[] }>(c.req.raw);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "Érvénytelen kérés" }, 400);
+  }
+  const name = (typeof body.name === "string" ? body.name : "")
+    .trim()
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .slice(0, 80)
+    .trim();
+  if (name.length < 2 || !Array.isArray(body.memberIds)) {
+    return c.json({ error: "Adj nevet és tagokat a csoportnak" }, 400);
+  }
+  const memberIds = body.memberIds
+    .filter((uid): uid is string => typeof uid === "string")
+    .map((uid) => uid.trim());
+  if (memberIds.length > 25 || memberIds.some((uid) => !/^[A-Za-z0-9_-]{6,80}$/.test(uid))) {
+    return c.json({ error: "Érvénytelen csoporttag-lista" }, 400);
+  }
 
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ error: "Nincs család" }, 400);

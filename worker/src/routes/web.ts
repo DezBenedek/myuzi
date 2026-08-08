@@ -5,6 +5,7 @@ import {
   hmacSha256,
   id,
   inviteToken,
+  isValidEmail,
   isExpired,
   normalizeEmail,
   sessionToken,
@@ -21,6 +22,8 @@ import {
   isFamilyMember,
   leaveCurrentFamily,
   memberCount,
+  pruneUserSessions,
+  removeFamilyMember,
 } from "../lib/db";
 import { inviteEmail, loginCodeEmail, sendEmail } from "../lib/email";
 import { getStripe, changePaidPlan, cancelAtPeriodEnd, resumeSubscription } from "../lib/stripe";
@@ -41,6 +44,16 @@ import { appCallPage, appChatPage, appInboxPage, userQrPage } from "../web/app_p
 import type { UserRow } from "../types";
 
 const web = new Hono<{ Bindings: Env; Variables: Variables }>();
+web.use("*", async (c, next) => {
+  const declared = c.req.header("Content-Length");
+  if (declared) {
+    const length = Number(declared);
+    if (!Number.isFinite(length) || length < 0 || length > 64 * 1024) {
+      return c.text("A kérés túl nagy", 413);
+    }
+  }
+  await next();
+});
 
 type InviteRow = {
   id: string;
@@ -52,11 +65,27 @@ type InviteRow = {
   family_name?: string;
 };
 
+function cleanDisplayName(value: string): string {
+  return value
+    .trim()
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .slice(0, 80)
+    .trim();
+}
+
 async function sendLoginPin(
   env: Env,
   email: string,
   visionAssist = 0,
-): Promise<void> {
+): Promise<boolean> {
+  const recent = await env.DB.prepare(
+    `SELECT 1 AS ok FROM auth_codes
+     WHERE email = ? AND created_at > datetime('now', '-60 seconds')`,
+  )
+    .bind(email)
+    .first<{ ok: number }>();
+  if (recent) return false;
+
   const existing = await getUserByEmail(env.DB, email);
   const displayName = existing?.name || "Felhasználó";
   const code = sixDigitCode();
@@ -77,6 +106,7 @@ async function sendLoginPin(
     .run();
   const mail = loginCodeEmail(env.APP_NAME, displayName, code);
   await sendEmail(env, { to: email, ...mail });
+  return true;
 }
 
 async function acceptInviteForUser(
@@ -110,6 +140,16 @@ async function acceptInviteForUser(
     await db.prepare(`UPDATE invites SET status = 'accepted' WHERE id = ?`).bind(invite.id).run();
     return { ok: true };
   }
+  const count = await memberCount(db, family.id);
+  if (!canAddMember(family, count)) {
+    return {
+      ok: false,
+      error: hasPaidPlan(family.plan)
+        ? "A család megtelt."
+        : "Ingyenes: max 3 fő. A tulajdonosnak elő kell fizetnie.",
+      familyName: family.name,
+    };
+  }
   if (existingFamily && existingFamily.id !== family.id) {
     if (!opts.confirmLeave) {
       return {
@@ -124,16 +164,6 @@ async function acceptInviteForUser(
     if (!left.ok) {
       return { ok: false, error: left.error, familyName: family.name };
     }
-  }
-  const count = await memberCount(db, family.id);
-  if (!canAddMember(family, count)) {
-    return {
-      ok: false,
-      error: hasPaidPlan(family.plan)
-        ? "A család megtelt."
-        : "Ingyenes: max 3 fő. A tulajdonosnak elő kell fizetnie.",
-      familyName: family.name,
-    };
   }
   if (!(await isFamilyMember(db, family.id, user.id))) {
     await db.batch([
@@ -231,6 +261,7 @@ web.get("/auth/bridge", async (c) => {
   )
     .bind(id("ses"), row.user_id, sessionHash, addDays(60))
     .run();
+  await pruneUserSessions(c.env.DB, row.user_id);
 
   c.header(
     "Set-Cookie",
@@ -244,12 +275,15 @@ web.post("/login", async (c) => {
   const email = normalizeEmail(String(form.email ?? ""));
   const visionAssist = form.visionAssist === "1" ? 1 : 0;
 
-  if (!email.includes("@")) {
+  if (!isValidEmail(email)) {
     return c.html(loginPage("Érvényes email kell."), 400);
   }
 
   try {
-    await sendLoginPin(c.env, email, visionAssist);
+    const sent = await sendLoginPin(c.env, email, visionAssist);
+    if (!sent) {
+      return c.html(loginPage("Kérj új kódot egy perc múlva."), 429);
+    }
   } catch (err) {
     console.error("[login email]", err);
     return c.html(loginPage("A kód küldése nem sikerült. Próbáld újra."), 500);
@@ -262,8 +296,11 @@ web.post("/login/verify", async (c) => {
   const form = await c.req.parseBody();
   const email = normalizeEmail(String(form.email ?? ""));
   const code = String(form.code ?? "").trim();
-  const name = String(form.name ?? "").trim();
+  const name = cleanDisplayName(String(form.name ?? ""));
   const inviteToken = String(form.inviteToken ?? "").trim();
+  if (!isValidEmail(email)) {
+    return c.html(loginPage("Érvénytelen email cím."), 400);
+  }
 
   const inviteOpts = inviteToken
     ? await (async () => {
@@ -337,6 +374,7 @@ web.post("/login/verify", async (c) => {
   )
     .bind(id("ses"), user!.id, tokenHash, addDays(60))
     .run();
+  await pruneUserSessions(c.env.DB, user!.id);
 
   setSessionCookie(c, token);
 
@@ -406,7 +444,7 @@ web.post("/account/family", optionalAuth, async (c) => {
   if (await getUserFamily(c.env.DB, user.id)) return c.redirect("/account");
 
   const form = await c.req.parseBody();
-  const name = String(form.name ?? "").trim();
+  const name = cleanDisplayName(String(form.name ?? ""));
   if (name.length < 2) return c.redirect("/account");
 
   const familyId = id("fam");
@@ -439,11 +477,7 @@ web.post("/account/members/remove", optionalAuth, async (c) => {
     return c.redirect("/account");
   }
 
-  await c.env.DB.prepare(
-    "DELETE FROM family_members WHERE family_id = ? AND user_id = ?",
-  )
-    .bind(family.id, targetUserId)
-    .run();
+  await removeFamilyMember(c.env.DB, family.id, targetUserId);
 
   return c.redirect("/account");
 });
@@ -478,8 +512,8 @@ web.post("/account/invite", optionalAuth, async (c) => {
 
   const form = await c.req.parseBody();
   const emailRaw = String(form.email ?? "").trim();
-  const email = emailRaw ? normalizeEmail(emailRaw) : null;
-  if (!email || !email.includes("@")) {
+  const email = normalizeEmail(emailRaw);
+  if (!isValidEmail(email)) {
     return c.html(
       accountPage({
         user,
@@ -796,7 +830,13 @@ web.get("/invite/:token", optionalAuth, async (c) => {
   // Not logged in: send PIN immediately when invite has an email.
   if (invite.email) {
     try {
-      await sendLoginPin(c.env, invite.email);
+      const sent = await sendLoginPin(c.env, invite.email);
+      if (!sent) {
+        return c.html(
+          inviteAcceptPage(invite.family_name, token, false, "Kérj új kódot egy perc múlva."),
+          429,
+        );
+      }
     } catch (err) {
       console.error("[invite pin]", err);
       return c.html(
@@ -835,7 +875,7 @@ web.post("/invite/:token/start", async (c) => {
 
   const form = await c.req.parseBody();
   const email = normalizeEmail(String(form.email ?? invite.email ?? ""));
-  if (!email.includes("@")) {
+  if (!isValidEmail(email)) {
     return c.html(inviteEmailPage(invite.family_name, token, "Érvényes email kell."), 400);
   }
 
@@ -852,7 +892,13 @@ web.post("/invite/:token/start", async (c) => {
   }
 
   try {
-    await sendLoginPin(c.env, email);
+    const sent = await sendLoginPin(c.env, email);
+    if (!sent) {
+      return c.html(
+        inviteEmailPage(invite.family_name, token, "Kérj új kódot egy perc múlva."),
+        429,
+      );
+    }
   } catch (err) {
     console.error("[invite start pin]", err);
     return c.html(

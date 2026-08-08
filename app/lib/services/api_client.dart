@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -33,6 +34,9 @@ class ApiException implements Exception {
 class ApiClient {
   ApiClient({http.Client? client}) : _client = client ?? http.Client();
 
+  static const _sessionKey = 'session_token';
+  static const _secureStorage = FlutterSecureStorage();
+
   final http.Client _client;
   String? _token;
   String _baseUrl = AppConfig.primaryBaseUrl;
@@ -43,7 +47,16 @@ class ApiClient {
 
   Future<void> loadSession() async {
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('session_token');
+    _token = await _secureStorage.read(key: _sessionKey);
+    if (_token == null) {
+      // Migrate tokens written by older versions exactly once.
+      final legacyToken = prefs.getString(_sessionKey);
+      if (legacyToken != null && legacyToken.isNotEmpty) {
+        _token = legacyToken;
+        await _secureStorage.write(key: _sessionKey, value: legacyToken);
+        await prefs.remove(_sessionKey);
+      }
+    }
     // Always use canonical host; drop stale workers.dev from older installs
     _baseUrl = AppConfig.primaryBaseUrl;
     await prefs.setString('api_base_url', _baseUrl);
@@ -51,14 +64,14 @@ class ApiClient {
 
   Future<void> saveSession(String token) async {
     _token = token;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('session_token', token);
+    await _secureStorage.write(key: _sessionKey, value: token);
   }
 
   Future<void> clearSession() async {
     _token = null;
+    await _secureStorage.delete(key: _sessionKey);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('session_token');
+    await prefs.remove(_sessionKey);
   }
 
   Map<String, String> _headers({Map<String, String>? extra, bool json = true}) {
@@ -74,13 +87,14 @@ class ApiClient {
     Future<http.Response> Function(Uri uri) request, {
     required String path,
     Map<String, String>? query,
+    Duration timeout = const Duration(seconds: 8),
   }) async {
     if (!NetStatus.online) {
       throw ApiException('Nincs internet');
     }
     final uri = Uri.parse('$_baseUrl$path').replace(queryParameters: query);
     try {
-      return await request(uri).timeout(const Duration(seconds: 8));
+      return await request(uri).timeout(timeout);
     } catch (e) {
       if (e is ApiException) rethrow;
       throw ApiException('Nem elérhető a szerver. Ellenőrizd az internetet.');
@@ -90,8 +104,15 @@ class ApiClient {
   Future<Map<String, dynamic>> _json(http.Response res) async {
     Map<String, dynamic> body = {};
     if (res.body.isNotEmpty) {
-      final decoded = jsonDecode(res.body);
-      if (decoded is Map<String, dynamic>) body = decoded;
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map<String, dynamic>) body = decoded;
+      } catch (_) {
+        throw ApiException(
+          'Érvénytelen szerverválasz',
+          statusCode: res.statusCode,
+        );
+      }
     }
     if (res.statusCode >= 400) {
       throw ApiException(
@@ -139,8 +160,8 @@ class ApiClient {
         body: jsonEncode({
           'email': email,
           'code': code,
-          if (name != null && name.isNotEmpty) 'name': name,
-          if (visionAssist != null) 'visionAssist': visionAssist,
+          ...?name != null && name.isNotEmpty ? {'name': name} : null,
+          ...?visionAssist != null ? {'visionAssist': visionAssist} : null,
         }),
       ),
       path: '/api/auth/verify',
@@ -184,9 +205,9 @@ class ApiClient {
         uri,
         headers: _headers(),
         body: jsonEncode({
-          if (name != null) 'name': name,
-          if (email != null) 'email': email,
-          if (visionAssist != null) 'visionAssist': visionAssist,
+          ...?name != null ? {'name': name} : null,
+          ...?email != null ? {'email': email} : null,
+          ...?visionAssist != null ? {'visionAssist': visionAssist} : null,
         }),
       ),
       path: '/api/auth/me',
@@ -282,6 +303,7 @@ class ApiClient {
     final res = await _send(
       (uri) => _client.get(uri, headers: _headers(json: false)),
       path: path,
+      timeout: const Duration(seconds: 30),
     );
     if (res.statusCode >= 400) {
       throw ApiException('Nem sikerült betölteni', statusCode: res.statusCode);
@@ -469,7 +491,7 @@ class ApiClient {
       path: '/api/messages/$conversationId',
       query: {
         'limit': '$limit',
-        if (before != null) 'before': before,
+        ...?before != null ? {'before': before} : null,
       },
     );
     final body = await _json(res);
@@ -488,7 +510,7 @@ class ApiClient {
       (uri) => _client.post(
         uri,
         headers: _headers(),
-        body: jsonEncode({if (at != null) 'at': at}),
+        body: jsonEncode({...?at != null ? {'at': at} : null}),
       ),
       path: '/api/messages/$conversationId/read',
     );
@@ -524,6 +546,7 @@ class ApiClient {
         body: bytes,
       ),
       path: '/api/messages/$conversationId',
+      timeout: const Duration(seconds: 60),
     );
     final body = await _json(res);
     return VoiceMessage.fromJson({
@@ -546,8 +569,8 @@ class ApiClient {
         uri,
         headers: _headers(),
         body: jsonEncode({
-          if (conversationId != null) 'conversationId': conversationId,
-          if (calleeIds != null) 'calleeIds': calleeIds,
+          ...?conversationId != null ? {'conversationId': conversationId} : null,
+          ...?calleeIds != null ? {'calleeIds': calleeIds} : null,
           'callType': callType,
         }),
       ),

@@ -9,7 +9,7 @@ export const requireAuth = createMiddleware<{ Bindings: Env; Variables: Variable
     const cookie = getCookie(c.req.header("Cookie") ?? "", "myuzi_session");
     const raw = header.startsWith("Bearer ") ? header.slice(7).trim() : cookie;
 
-    if (!raw) {
+    if (!raw || raw.length > 256) {
       return c.json({ error: "Bejelentkezés szükséges" }, 401);
     }
 
@@ -32,9 +32,12 @@ export const requireAuth = createMiddleware<{ Bindings: Env; Variables: Variable
       return c.json({ error: "Felhasználó nem található" }, 401);
     }
 
-    void c.env.DB.prepare("UPDATE sessions SET last_used_at = datetime('now') WHERE id = ?")
-      .bind(session.id)
-      .run();
+    c.executionCtx.waitUntil(
+      c.env.DB.prepare("UPDATE sessions SET last_used_at = datetime('now') WHERE id = ?")
+        .bind(session.id)
+        .run()
+        .catch((err) => console.error("[session touch]", err)),
+    );
 
     c.set("userId", user.id);
     c.set("user", user);
@@ -47,7 +50,7 @@ export const optionalAuth = createMiddleware<{ Bindings: Env; Variables: Variabl
     const header = c.req.header("Authorization") ?? "";
     const cookie = getCookie(c.req.header("Cookie") ?? "", "myuzi_session");
     const raw = header.startsWith("Bearer ") ? header.slice(7).trim() : cookie;
-    if (raw) {
+    if (raw && raw.length <= 256) {
       const tokenHash = await hmacSha256(c.env.SESSION_SECRET, raw);
       const session = await c.env.DB.prepare(
         "SELECT user_id, expires_at FROM sessions WHERE token_hash = ?",
@@ -71,7 +74,14 @@ function getCookie(cookieHeader: string, name: string): string | null {
   for (const part of parts) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
-    if (part.slice(0, eq) === name) return decodeURIComponent(part.slice(eq + 1));
+    if (part.slice(0, eq) === name) {
+      try {
+        const value = decodeURIComponent(part.slice(eq + 1));
+        return value.length <= 256 ? value : null;
+      } catch {
+        return null;
+      }
+    }
   }
   return null;
 }

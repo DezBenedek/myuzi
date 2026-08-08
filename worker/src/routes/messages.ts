@@ -4,10 +4,20 @@ import { id } from "../lib/crypto";
 import { getUserFamily, isConversationMember } from "../lib/db";
 import { notifyConversationMembers } from "../lib/push";
 import { voiceMaxMsForPlan } from "../lib/stripe";
+import { readLimitedBody, readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
-const MAX_BYTES = 20 * 1024 * 1024;
 const WAVE_BAR_COUNT = 32;
+const AUDIO_TYPES = new Set([
+  "audio/aac",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "audio/x-m4a",
+]);
 
 /** Parse client/server wave bars: ints 1–20, fixed length. */
 function parseWaveBars(raw: string | null | undefined): number[] | null {
@@ -110,12 +120,8 @@ messages.post("/:conversationId/read", async (c) => {
     return c.json({ error: "Nincs hozzáférés" }, 403);
   }
   let at: string | null = null;
-  try {
-    const body = await c.req.json<{ at?: string }>();
-    if (typeof body.at === "string" && body.at.length > 0) at = body.at;
-  } catch {
-    // empty body ok
-  }
+  const body = await readLimitedJson<{ at?: string }>(c.req.raw);
+  if (typeof body?.at === "string" && body.at.length > 0) at = body.at;
   await markRead(c.env.DB, conversationId, c.get("userId"), at);
   return c.json({ ok: true });
 });
@@ -140,6 +146,10 @@ messages.get("/audio/:messageId", async (c) => {
 
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
+  const contentType = (headers.get("content-type") ?? "").toLowerCase();
+  if (!AUDIO_TYPES.has(contentType)) {
+    return c.json({ error: "A hangfájl formátuma nem támogatott" }, 415);
+  }
   headers.set("etag", obj.httpEtag);
   headers.set("Cache-Control", "private, max-age=3600");
   return new Response(obj.body, { headers });
@@ -153,7 +163,10 @@ messages.get("/:conversationId", async (c) => {
   }
 
   const before = c.req.query("before");
-  const limit = Math.min(Number(c.req.query("limit") ?? 50), 100);
+  const requestedLimit = Number(c.req.query("limit") ?? 50);
+  const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(Math.floor(requestedLimit), 100))
+      : 50;
   const lastReadAt = await getLastReadAt(c.env.DB, conversationId, userId);
 
   let sql = `SELECT vm.*, u.name AS sender_name
@@ -227,8 +240,20 @@ messages.post("/:conversationId", async (c) => {
 
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   const maxDurationMs = voiceMaxMsForPlan(family?.plan);
+  const maxBytes =
+    family?.plan === "family_plus"
+      ? 20 * 1024 * 1024
+      : family?.plan === "family"
+        ? 12 * 1024 * 1024
+        : 8 * 1024 * 1024;
 
-  const contentType = c.req.header("Content-Type") ?? "audio/m4a";
+  const contentType = (c.req.header("Content-Type") ?? "audio/m4a")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  if (!AUDIO_TYPES.has(contentType)) {
+    return c.json({ error: "Csak hangfájl tölthető fel" }, 400);
+  }
   let durationMs = Number(c.req.header("X-Duration-Ms") ?? 0);
   if (!Number.isFinite(durationMs) || durationMs < 0) durationMs = 0;
   if (durationMs > maxDurationMs) durationMs = maxDurationMs;
@@ -236,35 +261,42 @@ messages.post("/:conversationId", async (c) => {
   const waveBars =
     parseWaveBars(c.req.header("X-Wave-Bars")) ?? randomWaveBars();
 
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0 || body.byteLength > MAX_BYTES) {
+  const body = await readLimitedBody(c.req.raw, maxBytes);
+  if (!body || body.byteLength === 0) {
     return c.json({ error: "Érvénytelen hangfájl" }, 400);
   }
 
   const messageId = id("msg");
   const key = `voice/${conversationId}/${messageId}`;
 
-  await c.env.VOICE.put(key, body, {
-    httpMetadata: { contentType },
-    customMetadata: {
-      senderId: c.get("userId"),
-      conversationId,
-    },
-  });
+  try {
+    await c.env.VOICE.put(key, body, {
+      httpMetadata: { contentType },
+      customMetadata: {
+        senderId: c.get("userId"),
+        conversationId,
+      },
+    });
 
-  await c.env.DB.prepare(
-    `INSERT INTO voice_messages (id, conversation_id, sender_id, r2_key, duration_ms, wave_bars)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      messageId,
-      conversationId,
-      c.get("userId"),
-      key,
-      durationMs,
-      JSON.stringify(waveBars),
+    await c.env.DB.prepare(
+      `INSERT INTO voice_messages (id, conversation_id, sender_id, r2_key, duration_ms, wave_bars)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run();
+      .bind(
+        messageId,
+        conversationId,
+        c.get("userId"),
+        key,
+        durationMs,
+        JSON.stringify(waveBars),
+      )
+      .run();
+  } catch (error) {
+    try {
+      await c.env.VOICE.delete(key);
+    } catch (_) {}
+    throw error;
+  }
 
   await c.env.DB.prepare(
     `UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`,
