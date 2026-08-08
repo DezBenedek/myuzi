@@ -1,19 +1,94 @@
+import { importPKCS8, SignJWT } from "jose";
 import type { Env } from "../types";
 
-/** Optional FCM legacy HTTP push. Set FCM_SERVER_KEY secret to enable. */
+type ServiceAccount = {
+  project_id: string;
+  private_key: string;
+  client_email: string;
+};
+
+type TokenCache = { accessToken: string; expiresAtMs: number };
+let tokenCache: TokenCache | null = null;
+
+function parseServiceAccount(raw: string | undefined): ServiceAccount | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ServiceAccount>;
+    if (
+      typeof parsed.project_id === "string" &&
+      typeof parsed.private_key === "string" &&
+      typeof parsed.client_email === "string"
+    ) {
+      return {
+        project_id: parsed.project_id,
+        private_key: parsed.private_key,
+        client_email: parsed.client_email,
+      };
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function getAccessToken(sa: ServiceAccount): Promise<string> {
+  const now = Date.now();
+  if (tokenCache && tokenCache.expiresAtMs > now + 60_000) {
+    return tokenCache.accessToken;
+  }
+
+  const key = await importPKCS8(sa.private_key, "RS256");
+  const issuedAt = Math.floor(now / 1000);
+  const jwt = await new SignJWT({
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+  })
+    .setProtectedHeader({ alg: "RS256" })
+    .setIssuer(sa.client_email)
+    .setSubject(sa.client_email)
+    .setAudience("https://oauth2.googleapis.com/token")
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + 3600)
+    .sign(key);
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+
+  const body = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+  };
+  if (!res.ok || !body.access_token) {
+    throw new Error(`FCM OAuth failed: ${body.error ?? res.status}`);
+  }
+
+  tokenCache = {
+    accessToken: body.access_token,
+    expiresAtMs: now + (body.expires_in ?? 3600) * 1000,
+  };
+  return body.access_token;
+}
+
+/** FCM HTTP v1. Set secret FCM_SERVICE_ACCOUNT_JSON (Firebase Admin SDK JSON). */
 export async function sendPush(
-  env: Env & { FCM_SERVER_KEY?: string },
+  env: Env,
   opts: {
     token: string;
     title: string;
     body: string;
     data?: Record<string, string>;
-    /** ringing / message */
     kind?: "call" | "message";
   },
 ): Promise<void> {
-  const key = (env as { FCM_SERVER_KEY?: string }).FCM_SERVER_KEY;
-  if (!key) {
+  // Ignore placeholder / non-FCM tokens.
+  if (!opts.token || opts.token.startsWith("device:")) return;
+
+  const sa = parseServiceAccount(env.FCM_SERVICE_ACCOUNT_JSON);
+  if (!sa) {
     console.log(
       JSON.stringify({
         push: "skipped_no_fcm",
@@ -27,28 +102,57 @@ export async function sendPush(
   }
 
   const isCall = opts.kind === "call";
-  const res = await fetch("https://fcm.googleapis.com/fcm/send", {
-    method: "POST",
-    headers: {
-      Authorization: `key=${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      to: opts.token,
-      priority: "high",
+  const data: Record<string, string> = {
+    ...(opts.data ?? {}),
+    title: opts.title,
+    body: opts.body,
+    kind: opts.kind ?? "message",
+  };
+
+  const message = {
+    message: {
+      token: opts.token,
+      data,
       notification: {
         title: opts.title,
         body: opts.body,
-        sound: isCall ? "ringtone" : "default",
-        android_channel_id: isCall ? "incoming_calls" : "messages",
       },
-      data: opts.data ?? {},
-      content_available: true,
-    }),
-  });
+      android: {
+        priority: "HIGH" as const,
+        ttl: isCall ? "60s" : "86400s",
+        notification: {
+          channelId: isCall ? "incoming_calls" : "messages",
+          sound: "default",
+          notificationPriority: isCall ? "PRIORITY_MAX" : "PRIORITY_HIGH",
+          ...(isCall
+            ? {
+                tag: `call_${opts.data?.callId ?? "incoming"}`,
+                sticky: true,
+              }
+            : {}),
+        },
+      },
+    },
+  };
 
-  if (!res.ok) {
-    console.error("FCM error", res.status, await res.text());
+  try {
+    const accessToken = await getAccessToken(sa);
+    const res = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(message),
+      },
+    );
+    if (!res.ok) {
+      console.error("FCM error", res.status, await res.text());
+    }
+  } catch (err) {
+    console.error("FCM send failed", err);
   }
 }
 

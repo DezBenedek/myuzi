@@ -9,8 +9,11 @@ import devices from "./routes/devices";
 import families from "./routes/families";
 import invites from "./routes/invites";
 import messages from "./routes/messages";
+import realtime from "./routes/realtime";
 import users from "./routes/users";
 import web from "./routes/web";
+
+export { UserHub } from "./realtime/user_hub";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const allowedApiOrigins = new Set([
@@ -78,6 +81,7 @@ app.route("/api/messages", messages);
 app.route("/api/calls", calls);
 app.route("/api/billing", billing);
 app.route("/api/devices", devices);
+app.route("/api/realtime", realtime);
 
 app.route("/", web);
 

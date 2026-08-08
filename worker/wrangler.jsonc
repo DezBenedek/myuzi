@@ -33,6 +33,20 @@
 			"bucket_name": "myuzi-voice"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "USER_HUB",
+				"class_name": "UserHub"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1_user_hub",
+			"new_sqlite_classes": ["UserHub"]
+		}
+	],
 	"send_email": [
 		{
 			"name": "EMAIL",

@@ -22,5 +22,5 @@ interface Env {
   LIVEKIT_API_SECRET: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
-  FCM_SERVER_KEY?: string;
+  FCM_SERVICE_ACCOUNT_JSON?: string;
 }

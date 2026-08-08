@@ -87,6 +87,39 @@ async function api(path, opts={}) {
     clearTimeout(timer);
   }
 }
+function connectRealtime(onEvent) {
+  let ws = null;
+  let backoff = 1000;
+  let closed = false;
+  let pingTimer = null;
+  function open() {
+    if (closed) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/api/realtime/ws');
+    ws.onopen = () => {
+      backoff = 1000;
+      clearInterval(pingTimer);
+      pingTimer = setInterval(() => {
+        try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+      }, 25000);
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (onEvent) onEvent(data);
+      } catch (_) {}
+    };
+    ws.onclose = () => {
+      clearInterval(pingTimer);
+      if (closed) return;
+      setTimeout(open, backoff);
+      backoff = Math.min(backoff * 2, 30000);
+    };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  }
+  open();
+  return () => { closed = true; clearInterval(pingTimer); try { ws && ws.close(); } catch (_) {} };
+}
 `;
 
 function appShell(title: string, user: UserRow, body: string): string {
@@ -176,7 +209,13 @@ export function appInboxPage(user: UserRow): string {
       }
     }
     load();
-    setInterval(load, 8000);
+    connectRealtime((ev) => {
+      if (ev.type === 'message_created' || ev.type === 'conversation_updated' ||
+          ev.type === 'incoming_call' || ev.type === 'call_ended' || ev.type === 'call_updated') {
+        load();
+      }
+    });
+    setInterval(load, 30000);
     </script>
   `,
   );
@@ -447,7 +486,11 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
     };
 
     loadMsgs();
-    setInterval(loadMsgs, 5000);
+    connectRealtime((ev) => {
+      if (ev.type === 'message_created' && ev.conversationId === conversationId) loadMsgs();
+      if (ev.type === 'call_updated' || ev.type === 'call_ended') loadMsgs();
+    });
+    setInterval(loadMsgs, 30000);
     </script>
   `,
   );

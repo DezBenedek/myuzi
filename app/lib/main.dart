@@ -5,6 +5,8 @@ import 'providers/providers.dart';
 import 'providers/theme_provider.dart';
 import 'router.dart';
 import 'services/app_notify.dart';
+import 'services/call_standby.dart';
+import 'services/push_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/incoming_call_host.dart';
 import 'widgets/offline_banner.dart';
@@ -12,6 +14,8 @@ import 'widgets/offline_banner.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppNotify.init();
+  await CallStandby.init();
+  await PushService.init();
   runApp(const ProviderScope(child: MyUziApp()));
 }
 

@@ -11,6 +11,7 @@ import 'package:record/record.dart';
 import '../models/models.dart';
 import '../providers/connectivity_provider.dart';
 import '../providers/providers.dart';
+import '../providers/realtime_provider.dart';
 import '../services/api_client.dart';
 import '../services/local_cache.dart';
 import '../services/toast.dart';
@@ -47,6 +48,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<void>? _completeSub;
   StreamSubscription<Amplitude>? _ampSub;
+  StreamSubscription? _rtSub;
   final _waveCollector = WaveformCollector();
   bool _sending = false;
   bool _recordStarting = false;
@@ -81,7 +83,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
     _posSub = _player.onPositionChanged.listen(_onPlayPosition);
     _boot();
-    _refresh = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true));
+    _refresh = Timer.periodic(const Duration(seconds: 25), (_) => _load(silent: true));
+    _rtSub = ref.read(realtimeProvider).events.listen((ev) {
+      final type = ev['type'] as String?;
+      if (type == 'message_created' &&
+          ev['conversationId'] == widget.conversationId) {
+        unawaited(_load(silent: true));
+      } else if ((type == 'call_updated' || type == 'call_ended') &&
+          ev['conversationId'] == widget.conversationId) {
+        unawaited(_load(silent: true));
+      }
+    });
   }
 
   void _onPlayPosition(Duration pos) {
@@ -110,6 +122,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _ampSub?.cancel();
     _posSub?.cancel();
     _completeSub?.cancel();
+    _rtSub?.cancel();
     final recordingPath = _recordPath;
     if (_recording) {
       unawaited(() async {

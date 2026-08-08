@@ -80,6 +80,23 @@ class _CallScreenState extends ConsumerState<CallScreen> {
 
   Future<void> _connect() async {
     try {
+      var url = widget.livekitUrl;
+      var token = widget.token;
+      var callType = widget.callType;
+
+      // Builder/router extras can be lost — re-join to recover LiveKit creds.
+      if (url.isEmpty || token.isEmpty) {
+        final session = await ref.read(apiProvider).joinCall(widget.callId);
+        url = session.livekitUrl;
+        token = session.token;
+        callType = session.callType;
+        if (mounted) {
+          setState(() {
+            // callType used via local; widget fields are final.
+          });
+        }
+      }
+
       final room = Room(
         roomOptions: const RoomOptions(
           adaptiveStream: true,
@@ -128,14 +145,15 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         })
         ..on<ActiveSpeakersChangedEvent>(_onActiveSpeakers);
 
-      await room.connect(widget.livekitUrl, widget.token);
+      await room.connect(url, token);
 
       if (!mounted || _closing) {
         await room.disconnect();
         return;
       }
       await room.localParticipant?.setMicrophoneEnabled(true);
-      if (_isVideo) {
+      final isVideo = callType == 'video' || _isVideo;
+      if (isVideo) {
         if (!mounted || _closing) {
           await room.disconnect();
           return;

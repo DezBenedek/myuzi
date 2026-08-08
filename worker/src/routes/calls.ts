@@ -9,6 +9,7 @@ import {
 } from "../lib/db";
 import { createLiveKitToken } from "../lib/livekit";
 import { notifyConversationMembers } from "../lib/push";
+import { publishToConversation } from "../lib/realtime";
 import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
@@ -166,21 +167,36 @@ async function notifyIncomingCall(
     fromName: string;
   },
 ): Promise<void> {
-  await notifyConversationMembers(env, {
+  const event = {
+    type: "incoming_call",
+    callId: opts.callId,
+    callType: opts.callType,
+    roomName: opts.roomName,
     conversationId: opts.conversationId,
-    excludeUserId: opts.excludeUserId,
-    title: "Bejövő hívás",
-    body: `${opts.fromName} hív (${opts.callType === "video" ? "videó" : "hang"})`,
-    kind: "call",
-    data: {
-      type: "incoming_call",
-      callId: opts.callId,
-      callType: opts.callType,
-      roomName: opts.roomName,
+    fromName: opts.fromName,
+  };
+  await Promise.all([
+    publishToConversation(env, {
       conversationId: opts.conversationId,
-      fromName: opts.fromName,
-    },
-  });
+      excludeUserId: opts.excludeUserId,
+      event,
+    }),
+    notifyConversationMembers(env, {
+      conversationId: opts.conversationId,
+      excludeUserId: opts.excludeUserId,
+      title: "Bejövő hívás",
+      body: `${opts.fromName} hív (${opts.callType === "video" ? "videó" : "hang"})`,
+      kind: "call",
+      data: {
+        type: "incoming_call",
+        callId: opts.callId,
+        callType: opts.callType,
+        roomName: opts.roomName,
+        conversationId: opts.conversationId,
+        fromName: opts.fromName,
+      },
+    }),
+  ]);
 }
 
 calls.post("/start", async (c) => {
@@ -374,6 +390,17 @@ calls.post("/:id/join", async (c) => {
       )
         .bind(call.conversation_id)
         .run();
+      c.executionCtx.waitUntil(
+        publishToConversation(c.env, {
+          conversationId: call.conversation_id,
+          event: {
+            type: "call_updated",
+            callId: call.id,
+            status: "active",
+            conversationId: call.conversation_id,
+          },
+        }),
+      );
     }
   }
 
@@ -413,6 +440,19 @@ calls.post("/:id/end", async (c) => {
   }
 
   const outcome = await finalizeCall(c.env.DB, call);
+  if (call.conversation_id) {
+    c.executionCtx.waitUntil(
+      publishToConversation(c.env, {
+        conversationId: call.conversation_id,
+        event: {
+          type: "call_ended",
+          callId: call.id,
+          outcome,
+          conversationId: call.conversation_id,
+        },
+      }),
+    );
+  }
   return c.json({ ok: true, outcome });
 });
 

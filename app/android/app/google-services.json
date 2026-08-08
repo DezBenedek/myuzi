@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "59549706890",
+    "project_id": "myuzi-backend",
+    "storage_bucket": "myuzi-backend.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:59549706890:android:01ab8c87f8fcb30e969b73",
+        "android_client_info": {
+          "package_name": "hu.dezso.myuzi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCwHDk-eXbykRfoWWvuyz1uYJgvrib6chQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -4,7 +4,7 @@
  * LIVEKIT_API_SECRET
  * STRIPE_SECRET_KEY
  * STRIPE_WEBHOOK_SECRET
- * FCM_SERVER_KEY (opcionális — push értesítésekhez)
+ * FCM_SERVICE_ACCOUNT_JSON (Firebase Admin SDK service account JSON — FCM HTTP v1)
  *
  * Email: Cloudflare Email Service `send_email` binding (`EMAIL`)
  * — onboardeld a uvmr.app domaint az Email Sendingben.
@@ -34,6 +34,7 @@ interface Env {
   DB: D1Database;
   VOICE: R2Bucket;
   EMAIL: SendEmail;
+  USER_HUB: DurableObjectNamespace;
   APP_NAME: string;
   APP_URL: string;
   LIVEKIT_URL: string;
@@ -45,7 +46,8 @@ interface Env {
   LIVEKIT_API_SECRET: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
-  FCM_SERVER_KEY?: string;
+  /** Full Firebase Admin SDK service account JSON string (FCM HTTP v1). */
+  FCM_SERVICE_ACCOUNT_JSON?: string;
 }
 
 type Variables = {

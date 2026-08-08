@@ -3,6 +3,7 @@ import type { Env, Variables } from "../types";
 import { id } from "../lib/crypto";
 import { getUserFamily, isConversationMember } from "../lib/db";
 import { notifyConversationMembers } from "../lib/push";
+import { publishToConversation } from "../lib/realtime";
 import { voiceMaxMsForPlan } from "../lib/stripe";
 import { readLimitedBody, readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
@@ -327,19 +328,32 @@ messages.post("/:conversationId", async (c) => {
 
   const me = c.get("user");
   c.executionCtx.waitUntil(
-    notifyConversationMembers(c.env, {
-      conversationId,
-      excludeUserId: me.id,
-      title: "Új hangüzenet",
-      body: `${me.name} hangüzenetet küldött`,
-      kind: "message",
-      data: {
-        type: "new_message",
+    Promise.all([
+      publishToConversation(c.env, {
         conversationId,
-        messageId,
-        fromName: me.name,
-      },
-    }),
+        excludeUserId: me.id,
+        event: {
+          type: "message_created",
+          conversationId,
+          messageId,
+          fromName: me.name,
+          durationMs,
+        },
+      }),
+      notifyConversationMembers(c.env, {
+        conversationId,
+        excludeUserId: me.id,
+        title: "Új hangüzenet",
+        body: `${me.name} hangüzenetet küldött`,
+        kind: "message",
+        data: {
+          type: "new_message",
+          conversationId,
+          messageId,
+          fromName: me.name,
+        },
+      }),
+    ]),
   );
 
   return c.json(

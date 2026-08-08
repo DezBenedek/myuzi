@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../models/models.dart';
 import '../providers/connectivity_provider.dart';
 import '../providers/providers.dart';
+import '../providers/realtime_provider.dart';
 import '../services/api_client.dart';
 import '../services/app_notify.dart';
 import '../services/toast.dart';
@@ -23,6 +24,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _poll;
+  StreamSubscription? _rtSub;
   int? _lastUnreadTotal;
   bool _sheetOpen = false;
   bool _tickInFlight = false;
@@ -31,13 +33,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _poll = Timer.periodic(const Duration(seconds: 6), (_) => _tick());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tick());
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _tick());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _rtSub = ref.read(realtimeProvider).events.listen((ev) {
+        final type = ev['type'] as String?;
+        if (type == 'message_created' ||
+            type == 'conversation_updated' ||
+            type == 'call_ended' ||
+            type == 'call_updated') {
+          unawaited(_refreshUnread());
+        }
+      });
+      _tick();
+    });
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _rtSub?.cancel();
     super.dispose();
   }
 

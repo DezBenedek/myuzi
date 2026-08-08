@@ -6,4 +6,4 @@ LIVEKIT_API_KEY=replace-with-livekit-api-key
 LIVEKIT_API_SECRET=replace-with-livekit-api-secret
 STRIPE_SECRET_KEY=sk_test_replace_me
 STRIPE_WEBHOOK_SECRET=whsec_replace_me
-# FCM_SERVER_KEY=optional-fcm-server-key
+# FCM_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"..."}
