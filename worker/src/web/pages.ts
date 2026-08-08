@@ -114,12 +114,15 @@ export function layout(title: string, body: string, vision = false): string {
     ? `body{font-size:1.2rem} .brand{font-size:3.2rem} button,input{min-height:60px;font-size:1.15rem;font-weight:800;border-width:2px}
        :root{--ink:#000;--bg:#fff;--brand:#004d33;--line:#000}`
     : "";
+  const safeTitle = escape(title);
   return `<!doctype html>
 <html lang="hu">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title} · MyÜzi</title>
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; media-src 'self' blob:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" />
+  <title>${safeTitle} · MyÜzi</title>
   <style>${css}${visionCss}</style>
 </head>
 <body>
@@ -319,8 +322,8 @@ export function accountPage(opts: {
             .join("")}
         </ul>
         <form method="POST" action="/account/invite" style="margin-top:16px">
-          <label for="inv">Meghívó email</label>
-          <input id="inv" name="email" type="email" placeholder="családtag@email.hu" />
+          <label for="inv">Meghívó email (kötelező)</label>
+          <input id="inv" name="email" type="email" required placeholder="családtag@email.hu" />
           <button type="submit">Meghívó</button>
         </form>
         ${inviteUrl ? `<p class="ok"><a href="${inviteUrl}">${inviteUrl}</a></p>` : ""}

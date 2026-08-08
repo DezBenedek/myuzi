@@ -1,0 +1,310 @@
+# Multi-platform Flutter release
+# macOS · Windows · Linux · iOS (unsigned IPA/app zip)
+#
+# Every push to main that touches app/ (or manual dispatch) builds all
+# targets, publishes a GitHub Release for the current pubspec version
+# (base 1.0.0), then bumps the version by +0.1 (1.0.0 → 1.1.0 → 1.2.0…)
+# with a [skip ci] commit so the bump does not re-trigger this workflow.
+#
+# Notes:
+# - iOS / macOS artifacts are unsigned (no Apple Developer certs in CI).
+#   Useful for archive/testing; device install needs local signing.
+# - Android remains in android.yml (can be merged into releases later).
+
+name: Flutter multi-platform release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/flutter-release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: flutter-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.44.9"
+  API_BASE_URL: "https://myuzi.uvmr.app"
+
+jobs:
+  prepare:
+    name: Read version
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]'))
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      build: ${{ steps.ver.outputs.build }}
+      tag: ${{ steps.ver.outputs.tag }}
+      label: ${{ steps.ver.outputs.label }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse pubspec version
+        id: ver
+        working-directory: app
+        run: |
+          set -euo pipefail
+          line=$(grep -E '^version:' pubspec.yaml | head -1 | awk '{print $2}')
+          # Expect MAJOR.MINOR.PATCH+BUILD  e.g. 1.0.0+1
+          version="${line%%+*}"
+          build="${line##*+}"
+          if [[ "$version" == "$line" ]]; then build="1"; fi
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          label="${major}.${minor}"
+          tag="v${label}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag ($version+$build)"
+
+  build-linux:
+    name: Linux
+    needs: prepare
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - run: flutter config --enable-linux-desktop
+      - run: flutter pub get
+      - name: Build
+        run: >
+          flutter build linux --release
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          out="myuzi-${{ needs.prepare.outputs.label }}-linux-x64"
+          mkdir -p "../dist"
+          cp -a build/linux/x64/release/bundle "../dist/$out"
+          (cd ../dist && tar -czf "$out.tar.gz" "$out")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myuzi-linux
+          path: dist/myuzi-*-linux-x64.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows
+    needs: prepare
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - name: Build
+        run: >
+          flutter build windows --release
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $label = "${{ needs.prepare.outputs.label }}"
+          $out = "myuzi-$label-windows-x64"
+          New-Item -ItemType Directory -Force -Path ..\dist | Out-Null
+          Copy-Item -Recurse build\windows\x64\runner\Release ..\dist\$out
+          Compress-Archive -Path ..\dist\$out\* -DestinationPath ..\dist\$out.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myuzi-windows
+          path: dist/myuzi-*-windows-x64.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    needs: prepare
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: CocoaPods
+        run: brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+
+      - run: flutter config --enable-macos-desktop
+      - run: flutter pub get
+      - name: Build
+        run: >
+          flutter build macos --release
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          label="${{ needs.prepare.outputs.label }}"
+          app_path=$(find build/macos -name "*.app" -type d | head -1)
+          test -n "$app_path"
+          out="myuzi-${label}-macos"
+          mkdir -p ../dist
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "../dist/${out}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myuzi-macos
+          path: dist/myuzi-*-macos.zip
+          if-no-files-found: error
+
+  build-ios:
+    name: iOS (unsigned)
+    needs: prepare
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: CocoaPods
+        run: brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+
+      - run: flutter pub get
+      - name: pod install
+        run: cd ios && pod install --repo-update
+
+      - name: Build unsigned
+        run: >
+          flutter build ios --release --no-codesign
+          --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+
+      - name: Package Runner.app
+        run: |
+          set -euo pipefail
+          label="${{ needs.prepare.outputs.label }}"
+          app_path="build/ios/iphoneos/Runner.app"
+          test -d "$app_path"
+          mkdir -p ../dist
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "../dist/myuzi-${label}-ios-unsigned.app.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myuzi-ios
+          path: dist/myuzi-*-ios-unsigned.app.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release + bump
+    needs: [prepare, build-linux, build-windows, build-macos, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp -v {} release-files/ \;
+          ls -lah release-files
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: MyÜzi ${{ needs.prepare.outputs.label }}
+          body: |
+            ## MyÜzi ${{ needs.prepare.outputs.label }}
+
+            Automatikus multi-platform build (`${{ needs.prepare.outputs.version }}+${{ needs.prepare.outputs.build }}`).
+
+            | Platform | Artifact |
+            |---|---|
+            | Linux x64 | `*-linux-x64.tar.gz` |
+            | Windows x64 | `*-windows-x64.zip` |
+            | macOS | `*-macos.zip` (unsigned) |
+            | iOS | `*-ios-unsigned.app.zip` (no codesign) |
+
+            **iOS / macOS:** unsigned CI builds — device/App Store installhez helyi Apple signing kell.
+          files: release-files/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump version by +0.1
+        working-directory: app
+        run: |
+          set -euo pipefail
+          line=$(grep -E '^version:' pubspec.yaml | head -1 | awk '{print $2}')
+          version="${line%%+*}"
+          build="${line##*+}"
+          if [[ "$version" == "$line" ]]; then build="1"; fi
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          next_minor=$((minor + 1))
+          next_build=$((build + 1))
+          next="${major}.${next_minor}.0+${next_build}"
+          sed -i.bak -E "s/^version: .*/version: ${next}/" pubspec.yaml
+          rm -f pubspec.yaml.bak
+          echo "Bumped version → $next"
+          cat pubspec.yaml | grep -E '^version:'
+
+      - name: Commit version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/pubspec.yaml
+          if git diff --cached --quiet; then
+            echo "No version change to commit"
+            exit 0
+          fi
+          next=$(grep -E '^version:' app/pubspec.yaml | awk '{print $2}')
+          git commit -m "chore: bump version to ${next} [skip ci]"
+          git push origin HEAD:main

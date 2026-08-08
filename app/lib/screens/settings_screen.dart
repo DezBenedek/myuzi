@@ -173,9 +173,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       showDragHandle: true,
       builder: (ctx) => _InviteSheet(
         onCreate: (email) async {
-          final url = await ref.read(apiProvider).createInvite(
-                email: email.isEmpty ? null : email,
-              );
+          final url = await ref.read(apiProvider).createInvite(email: email);
           await Clipboard.setData(ClipboardData(text: url));
           return url;
         },
@@ -682,9 +680,14 @@ class _InviteSheetState extends State<_InviteSheet> {
 
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
+    final email = _email.text.trim();
+    if (!email.contains('@')) {
+      showAppToast(context, 'Érvényes email kell', error: true);
+      return;
+    }
     setState(() => _busy = true);
     try {
-      final url = await widget.onCreate(_email.text.trim());
+      final url = await widget.onCreate(email);
       if (!mounted) return;
       setState(() {
         _inviteUrl = url;
@@ -715,7 +718,7 @@ class _InviteSheetState extends State<_InviteSheet> {
           Text('Meghívó', style: t.textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(
-            'Opcionális email — ha megadod, elküldjük a meghívót.',
+            'Add meg a meghívott email címét — a meghívó csak ehhez a címhez kötődik.',
             style: t.textTheme.bodyMedium,
           ),
           const SizedBox(height: 14),
@@ -723,7 +726,7 @@ class _InviteSheetState extends State<_InviteSheet> {
             controller: _email,
             keyboardType: TextInputType.emailAddress,
             autofocus: true,
-            decoration: const InputDecoration(hintText: 'email@pelda.hu (opcionális)'),
+            decoration: const InputDecoration(hintText: 'email@pelda.hu'),
           ),
           if (_inviteUrl != null) ...[
             const SizedBox(height: 12),

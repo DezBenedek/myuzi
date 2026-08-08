@@ -174,6 +174,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   var _inviteToFamily = false;
   var _handling = false;
   String? _lastRaw;
+  DateTime? _cooldownUntil;
 
   @override
   void dispose() {
@@ -183,6 +184,9 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
 
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_handling || !mounted) return;
+    final now = DateTime.now();
+    if (_cooldownUntil != null && now.isBefore(_cooldownUntil!)) return;
+
     final raw = capture.barcodes
         .map((b) => b.rawValue)
         .whereType<String>()
@@ -192,6 +196,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
 
     final userId = parseQrUserId(raw);
     if (userId == null) {
+      _cooldownUntil = now.add(const Duration(seconds: 2));
       showAppToast(context, 'Érvénytelen MyÜzi QR', error: true);
       return;
     }
@@ -239,8 +244,10 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         error: true,
       );
     } on ApiException catch (e) {
+      _cooldownUntil = DateTime.now().add(const Duration(seconds: 2));
       if (mounted) showAppToast(context, e.message, error: true);
     } catch (_) {
+      _cooldownUntil = DateTime.now().add(const Duration(seconds: 2));
       if (mounted) showAppToast(context, 'Beolvasás sikertelen', error: true);
     } finally {
       _handling = false;

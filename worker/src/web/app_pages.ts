@@ -6,7 +6,13 @@ function escape(s: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/** Safe conversation / call id for URLs and JS. */
+function safeId(id: string): string {
+  return /^[A-Za-z0-9_-]{6,80}$/.test(id) ? id : "";
 }
 
 const appCss = `
@@ -45,12 +51,33 @@ const appCss = `
 .call-controls button { width:auto; flex:1; min-width:110px; margin-top:0; }
 `;
 
-function appShell(title: string, user: UserRow, body: string, extraHead = ""): string {
+/** Shared client helpers — escape API strings before any HTML use. */
+const clientHelpers = `
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+async function api(path, opts={}) {
+  const headers = { 'X-Client': 'web', ...(opts.headers||{}) };
+  if (opts.json !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, {
+    credentials: 'include',
+    method: opts.method || (opts.json !== undefined || opts.body ? 'POST' : 'GET'),
+    headers,
+    body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ('Hiba ' + res.status));
+  return body;
+}
+`;
+
+function appShell(title: string, user: UserRow, body: string): string {
   return layout(
     title,
     `
     <style>${appCss}</style>
-    ${extraHead}
     <div class="nav">
       <a href="/app"><button class="secondary" type="button" style="margin:0;width:auto;padding:10px 14px">Beszélgetések</button></a>
       <a href="/account"><button class="ghost" type="button" style="margin:0;width:auto;padding:10px 14px">Fiók</button></a>
@@ -74,16 +101,7 @@ export function appInboxPage(user: UserRow): string {
       <ul class="chat-list" id="list"></ul>
     </div>
     <script>
-    async function api(path, opts={}) {
-      const res = await fetch(path, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Client': 'web', ...(opts.headers||{}) },
-        ...opts,
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || ('Hiba ' + res.status));
-      return body;
-    }
+    ${clientHelpers}
     function fmt(iso) {
       if (!iso) return '';
       try { return new Date(iso).toLocaleString('hu-HU', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
@@ -97,17 +115,41 @@ export function appInboxPage(user: UserRow): string {
         const chats = data.conversations || [];
         if (!chats.length) {
           status.textContent = 'Még nincs beszélgetés. Nyisd meg az appot, vagy hívj meg valakit.';
-          list.innerHTML = '';
+          list.replaceChildren();
           return;
         }
         status.textContent = '';
-        list.innerHTML = chats.map(c => {
-          const badge = c.unreadCount > 0 ? '<span class="badge">'+c.unreadCount+'</span>' : '';
-          const q = encodeURIComponent(c.name || 'Beszélgetés');
-          return '<li><a href="/app/chat/'+c.id+'?name='+q+'"><span><strong>'+
-            (c.name||'Beszélgetés')+'</strong><br/><span class="hint">'+(c.lastSenderName? c.lastSenderName+': hangüzenet':'')+
-            '</span></span><span class="meta">'+fmt(c.lastMessageAt)+'<br/>'+badge+'</span></a></li>';
-        }).join('');
+        list.replaceChildren();
+        for (const c of chats) {
+          const id = String(c.id || '');
+          if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) continue;
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = '/app/chat/' + encodeURIComponent(id);
+          const left = document.createElement('span');
+          const strong = document.createElement('strong');
+          strong.textContent = c.name || 'Beszélgetés';
+          left.appendChild(strong);
+          left.appendChild(document.createElement('br'));
+          const hint = document.createElement('span');
+          hint.className = 'hint';
+          hint.textContent = c.lastSenderName ? (c.lastSenderName + ': hangüzenet') : '';
+          left.appendChild(hint);
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.appendChild(document.createTextNode(fmt(c.lastMessageAt)));
+          if (c.unreadCount > 0) {
+            meta.appendChild(document.createElement('br'));
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = String(c.unreadCount);
+            meta.appendChild(badge);
+          }
+          a.appendChild(left);
+          a.appendChild(meta);
+          li.appendChild(a);
+          list.appendChild(li);
+        }
       } catch (e) {
         status.textContent = e.message || 'Betöltési hiba';
       }
@@ -120,12 +162,16 @@ export function appInboxPage(user: UserRow): string {
 }
 
 export function appChatPage(user: UserRow, conversationId: string, title: string): string {
-  const safeTitle = escape(title);
+  const id = safeId(conversationId);
+  if (!id) {
+    return appShell("Hiba", user, `<div class="panel"><p class="error">Érvénytelen beszélgetés.</p></div>`);
+  }
+  const safeTitle = escape(title || "Beszélgetés");
   return appShell(
-    title,
+    title || "Beszélgetés",
     user,
     `
-    <h1 class="brand" style="font-size:1.7rem">${safeTitle}</h1>
+    <h1 class="brand" style="font-size:1.7rem" id="chatTitle">${safeTitle}</h1>
     <div class="row" style="margin-bottom:10px">
       <button type="button" id="btnAudio" class="secondary">Hanghívás</button>
       <button type="button" id="btnVideo">Videóhívás</button>
@@ -139,27 +185,14 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
       </div>
     </div>
     <script>
-    const conversationId = ${JSON.stringify(conversationId)};
+    ${clientHelpers}
+    const conversationId = ${JSON.stringify(id)};
     const meId = ${JSON.stringify(user.id)};
-    const chatTitle = ${JSON.stringify(title)};
     let mediaRecorder = null;
     let chunks = [];
     let recording = false;
     let startedAt = 0;
-
-    async function api(path, opts={}) {
-      const headers = { 'X-Client': 'web', ...(opts.headers||{}) };
-      if (opts.json) headers['Content-Type'] = 'application/json';
-      const res = await fetch(path, {
-        credentials: 'include',
-        method: opts.method || (opts.json || opts.body ? 'POST' : 'GET'),
-        headers,
-        body: opts.json ? JSON.stringify(opts.json) : opts.body,
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || ('Hiba ' + res.status));
-      return body;
-    }
+    let chatTitle = document.getElementById('chatTitle').textContent || 'Beszélgetés';
 
     function fmtDur(ms) {
       const s = Math.max(0, Math.round((ms||0)/1000));
@@ -169,6 +202,7 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
     }
 
     async function playMsg(url) {
+      if (!url || !url.startsWith('/api/messages/audio/')) throw new Error('Érvénytelen hang');
       const res = await fetch(url, { credentials: 'include', headers: { 'X-Client': 'web' } });
       if (!res.ok) throw new Error('Lejátszás sikertelen');
       const blob = await res.blob();
@@ -185,16 +219,27 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
         const data = await api('/api/messages/'+conversationId);
         const msgs = data.messages || [];
         status.textContent = msgs.length ? '' : 'Még nincs hangüzenet.';
-        box.innerHTML = msgs.map(m => {
+        box.replaceChildren();
+        for (const m of msgs) {
+          const div = document.createElement('div');
           const mine = m.senderId === meId;
-          const cls = 'bubble'+(mine?' mine':'')+(m.unread?' unread':'');
-          return '<div class="'+cls+'"><div class="who">'+m.senderName+'</div>'+
-            '<button type="button" data-url="'+m.url+'" class="play">▶ '+fmtDur(m.durationMs)+'</button>'+
-            '<div class="time">'+new Date(m.createdAt).toLocaleString('hu-HU')+'</div></div>';
-        }).join('');
-        box.querySelectorAll('button.play').forEach(btn => {
-          btn.onclick = () => playMsg(btn.dataset.url).catch(e => alert(e.message || 'Hiba'));
-        });
+          div.className = 'bubble'+(mine?' mine':'')+(m.unread?' unread':'');
+          const who = document.createElement('div');
+          who.className = 'who';
+          who.textContent = m.senderName || '';
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = '▶ ' + fmtDur(m.durationMs);
+          const url = String(m.url || '');
+          btn.onclick = () => playMsg(url).catch(e => alert(e.message || 'Hiba'));
+          const time = document.createElement('div');
+          time.className = 'time';
+          time.textContent = new Date(m.createdAt).toLocaleString('hu-HU');
+          div.appendChild(who);
+          div.appendChild(btn);
+          div.appendChild(time);
+          box.appendChild(div);
+        }
       } catch (e) {
         status.textContent = e.message || 'Hiba';
       }
@@ -207,13 +252,13 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
           json: { conversationId, callType: type },
         });
         const call = data.call;
-        const q = new URLSearchParams({
-          url: call.livekitUrl,
-          token: call.token,
-          type: call.callType,
+        // Token stays in memory / join API — never put JWT in the URL.
+        sessionStorage.setItem('myuzi_call_' + call.id, JSON.stringify({
+          callType: call.callType,
           title: chatTitle,
-        });
-        location.href = '/app/call/'+call.id+'?'+q.toString();
+        }));
+        location.href = '/app/call/' + encodeURIComponent(call.id) +
+          '?type=' + encodeURIComponent(call.callType === 'video' ? 'video' : 'audio');
       } catch (e) {
         alert(e.message || 'Hívás indítása sikertelen');
       }
@@ -240,7 +285,7 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
                 method: 'POST',
                 headers: {
                   'Content-Type': blob.type || 'audio/webm',
-                  'X-Duration-Ms': String(durationMs),
+                  'X-Duration-Ms': String(Math.min(durationMs, 20 * 60 * 1000)),
                 },
                 body: blob,
               });
@@ -276,17 +321,19 @@ export function appCallPage(
   user: UserRow,
   opts: {
     callId: string;
-    livekitUrl: string;
-    token: string;
     callType: "audio" | "video";
     title: string;
   },
 ): string {
+  const callId = safeId(opts.callId);
+  if (!callId) {
+    return appShell("Hiba", user, `<div class="panel"><p class="error">Érvénytelen hívás.</p></div>`);
+  }
   return appShell(
-    opts.title,
+    opts.title || "Hívás",
     user,
     `
-    <h1 class="brand" style="font-size:1.6rem">${escape(opts.title)}</h1>
+    <h1 class="brand" style="font-size:1.6rem">${escape(opts.title || "Hívás")}</h1>
     <p class="hint">${opts.callType === "video" ? "Videóhívás" : "Hanghívás"}</p>
     <div id="status" class="hint">Csatlakozás…</div>
     <div class="video-grid" id="grid"></div>
@@ -295,25 +342,27 @@ export function appCallPage(
       <button type="button" id="camBtn" class="secondary" ${opts.callType === "video" ? "" : "disabled"}>Kamera</button>
       <button type="button" id="endBtn" style="background:var(--danger)">Befejezés</button>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.9.1/dist/livekit-client.umd.min.js"></script>
     <script>
-    const callId = ${JSON.stringify(opts.callId)};
-    const livekitUrl = ${JSON.stringify(opts.livekitUrl)};
-    const token = ${JSON.stringify(opts.token)};
+    ${clientHelpers}
+    const callId = ${JSON.stringify(callId)};
     const isVideo = ${opts.callType === "video" ? "true" : "false"};
-    const Livekit = window.LivekitClient;
     let room = null;
     let micOn = true;
     let camOn = isVideo;
 
-    function el(tag, attrs={}) {
-      const n = document.createElement(tag);
-      Object.assign(n, attrs);
-      return n;
+    function loadSdk(cb) {
+      if (window.LivekitClient) return cb();
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.9.1/dist/livekit-client.umd.min.js';
+      s.crossOrigin = 'anonymous';
+      s.onload = cb;
+      s.onerror = () => { document.getElementById('status').textContent = 'LiveKit SDK betöltése sikertelen'; };
+      document.head.appendChild(s);
     }
+    loadSdk(connect);
 
     function attachTrack(track, container) {
-      if (track.kind === 'audio' && track.sid) {
+      if (track.kind === 'audio') {
         const a = track.attach();
         a.autoplay = true;
         a.playsInline = true;
@@ -324,7 +373,6 @@ export function appCallPage(
         const v = track.attach();
         v.autoplay = true;
         v.playsInline = true;
-        v.muted = track.participant && track.participant.isLocal;
         container.appendChild(v);
       }
     }
@@ -332,27 +380,34 @@ export function appCallPage(
     async function connect() {
       const status = document.getElementById('status');
       const grid = document.getElementById('grid');
-      if (!token || !Livekit) {
-        status.textContent = 'Hiányzó hívási token vagy LiveKit SDK.';
+      const Livekit = window.LivekitClient;
+      if (!Livekit) {
+        status.textContent = 'LiveKit SDK hiányzik.';
         return;
       }
       try {
+        const data = await api('/api/calls/' + callId + '/join', { method: 'POST', json: {} });
+        const call = data.call;
+        const livekitUrl = call.livekitUrl;
+        const token = call.token;
+        if (!livekitUrl || !token) throw new Error('Hiányzó hívási adatok');
+
         room = new Livekit.Room({ adaptiveStream: true, dynacast: true });
-        room.on(Livekit.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-          const tile = el('div');
-          tile.dataset.identity = participant.identity;
+        room.on(Livekit.RoomEvent.TrackSubscribed, (track) => {
+          const tile = document.createElement('div');
           attachTrack(track, tile);
           grid.appendChild(tile);
         });
-        room.on(Livekit.RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach(n => n.remove()));
+        room.on(Livekit.RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach().forEach(n => n.remove());
+        });
         room.on(Livekit.RoomEvent.Disconnected, () => { status.textContent = 'Lecsatlakozva'; });
         await room.connect(livekitUrl, token);
         await room.localParticipant.setMicrophoneEnabled(true);
         if (isVideo) await room.localParticipant.setCameraEnabled(true);
-        // local video
         room.localParticipant.videoTrackPublications.forEach(pub => {
           if (pub.track) {
-            const tile = el('div');
+            const tile = document.createElement('div');
             attachTrack(pub.track, tile);
             grid.appendChild(tile);
           }
@@ -376,16 +431,11 @@ export function appCallPage(
     };
     document.getElementById('endBtn').onclick = async () => {
       try {
-        await fetch('/api/calls/'+callId+'/end', {
-          method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json','X-Client':'web'},
-          body:'{}'
-        });
+        await api('/api/calls/'+callId+'/end', { method:'POST', json: {} });
       } catch {}
       try { await room?.disconnect(); } catch {}
       location.href = '/app';
     };
-    connect();
     </script>
   `,
   );
@@ -396,13 +446,14 @@ export function userQrPage(opts: {
   meId: string | null;
   loggedIn: boolean;
 }): string {
+  const id = safeId(opts.userId) || escape(opts.userId);
   return layout(
     "QR kapcsolat",
     `
     <h1 class="brand">MyÜzi</h1>
     <p class="sub">QR kód / felhasználói link</p>
     <div class="panel">
-      <p class="hint">Azonosító: <code>${escape(opts.userId)}</code></p>
+      <p class="hint">Azonosító: <code>${escape(id)}</code></p>
       ${
         opts.loggedIn
           ? opts.meId === opts.userId

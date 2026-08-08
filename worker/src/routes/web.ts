@@ -96,10 +96,12 @@ async function acceptInviteForUser(
 > {
   const family = await getFamily(db, invite.family_id);
   if (!family) return { ok: false, error: "A család nem található.", familyName: "" };
-  if (invite.email && invite.email.toLowerCase() !== user.email.toLowerCase()) {
+  if (!invite.email || invite.email.toLowerCase() !== user.email.toLowerCase()) {
     return {
       ok: false,
-      error: `Ez a meghívó a(z) ${invite.email} címre szól.`,
+      error: invite.email
+        ? `Ez a meghívó a(z) ${invite.email} címre szól.`
+        : "Érvénytelen meghívó (nincs emailhez kötve).",
       familyName: family.name,
     };
   }
@@ -165,27 +167,36 @@ web.get("/app", optionalAuth, async (c) => {
 
 web.get("/app/chat/:id", optionalAuth, async (c) => {
   const user = c.get("user");
-  if (!user) return c.redirect(`/login?next=/app/chat/${c.req.param("id")}`);
-  const name = c.req.query("name") || "Beszélgetés";
-  return c.html(appChatPage(user, c.req.param("id"), name));
+  if (!user) return c.redirect("/login");
+  const id = c.req.param("id");
+  if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) {
+    return c.html(appInboxPage(user));
+  }
+  return c.html(appChatPage(user, id, "Beszélgetés"));
 });
 
 web.get("/app/call/:id", optionalAuth, async (c) => {
   const user = c.get("user");
-  if (!user) return c.redirect("/login?next=/app");
+  if (!user) return c.redirect("/login");
+  const callId = c.req.param("id");
+  if (!/^[A-Za-z0-9_-]{6,80}$/.test(callId)) {
+    return c.html(appInboxPage(user));
+  }
+  const callType = c.req.query("type") === "video" ? "video" : "audio";
   return c.html(
     appCallPage(user, {
-      callId: c.req.param("id"),
-      livekitUrl: c.req.query("url") || c.env.LIVEKIT_URL,
-      token: c.req.query("token") || "",
-      callType: c.req.query("type") === "video" ? "video" : "audio",
-      title: c.req.query("title") || "Hívás",
+      callId,
+      callType,
+      title: callType === "video" ? "Videóhívás" : "Hanghívás",
     }),
   );
 });
 
 web.get("/u/:userId", optionalAuth, async (c) => {
   const userId = c.req.param("userId");
+  if (!/^[A-Za-z0-9_-]{6,80}$/.test(userId)) {
+    return c.redirect("/");
+  }
   const me = c.get("user");
   return c.html(userQrPage({ userId, meId: me?.id ?? null, loggedIn: !!me }));
 });
@@ -468,6 +479,16 @@ web.post("/account/invite", optionalAuth, async (c) => {
   const form = await c.req.parseBody();
   const emailRaw = String(form.email ?? "").trim();
   const email = emailRaw ? normalizeEmail(emailRaw) : null;
+  if (!email || !email.includes("@")) {
+    return c.html(
+      accountPage({
+        user,
+        family,
+        members,
+        error: "Meghívóhoz érvényes email cím kell.",
+      }),
+    );
+  }
   const token = inviteToken();
   await c.env.DB.prepare(
     `INSERT INTO invites (id, family_id, email, token, invited_by, expires_at)
@@ -477,16 +498,14 @@ web.post("/account/invite", optionalAuth, async (c) => {
     .run();
 
   const inviteUrl = `${publicBaseUrl(c.req.url, c.env)}/invite/${token}`;
-  let message = email ? "Meghívó elküldve emailben." : "Meghívó link kész.";
-  if (email) {
-    try {
-      const mail = inviteEmail(c.env.APP_NAME, family.name, user.name, inviteUrl);
-      await sendEmail(c.env, { to: email, ...mail });
-    } catch (err) {
-      console.error("[invite email]", err);
-      message =
-        "A meghívó link elkészült, de az email küldése nem sikerült. Másold ki a linket lent.";
-    }
+  let message = "Meghívó elküldve emailben.";
+  try {
+    const mail = inviteEmail(c.env.APP_NAME, family.name, user.name, inviteUrl);
+    await sendEmail(c.env, { to: email, ...mail });
+  } catch (err) {
+    console.error("[invite email]", err);
+    message =
+      "A meghívó link elkészült, de az email küldése nem sikerült. Másold ki a linket lent.";
   }
 
   return c.html(
@@ -763,16 +782,15 @@ web.get("/invite/:token", optionalAuth, async (c) => {
 
   const user = c.get("user");
   if (user) {
-    const result = await acceptInviteForUser(c.env.DB, invite, user);
-    if (!result.ok) {
-      return c.html(
-        inviteAcceptPage(result.familyName || invite.family_name, token, true, result.error, {
-          needsLeaveConfirmation: result.needsLeaveConfirmation,
-          currentFamilyName: result.currentFamilyName,
-        }),
-      );
-    }
-    return c.redirect("/app");
+    // Never auto-join on GET — show explicit accept UI (prevents drive-by joins).
+    const existing = await getUserFamily(c.env.DB, user.id);
+    const needsLeave = !!existing && existing.id !== invite.family_id;
+    return c.html(
+      inviteAcceptPage(invite.family_name, token, true, "", {
+        needsLeaveConfirmation: needsLeave,
+        currentFamilyName: needsLeave ? existing?.name : undefined,
+      }),
+    );
   }
 
   // Not logged in: send PIN immediately when invite has an email.

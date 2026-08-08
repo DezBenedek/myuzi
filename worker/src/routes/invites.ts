@@ -41,6 +41,9 @@ invites.post("/", requireAuth, async (c) => {
   }
 
   const email = body.email ? normalizeEmail(body.email) : null;
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "Meghívóhoz email cím kell" }, 400);
+  }
   const token = inviteToken();
   const inviteId = id("inv");
 
@@ -55,16 +58,14 @@ invites.post("/", requireAuth, async (c) => {
   let emailSent = false;
   let emailWarning: string | undefined;
 
-  if (email) {
-    try {
-      const mail = inviteEmail(c.env.APP_NAME, family.name, c.get("user").name, inviteUrl);
-      await sendEmail(c.env, { to: email, ...mail });
-      emailSent = true;
-    } catch (err) {
-      console.error("[invite email]", err);
-      emailWarning =
-        "A meghívó link elkészült, de az email küldése nem sikerült. Másold ki a linket.";
-    }
+  try {
+    const mail = inviteEmail(c.env.APP_NAME, family.name, c.get("user").name, inviteUrl);
+    await sendEmail(c.env, { to: email, ...mail });
+    emailSent = true;
+  } catch (err) {
+    console.error("[invite email]", err);
+    emailWarning =
+      "A meghívó link elkészült, de az email küldése nem sikerült. Másold ki a linket.";
   }
 
   return c.json({
@@ -267,7 +268,7 @@ invites.post("/:token/accept", requireAuth, async (c) => {
     return c.json({ error: "Érvénytelen vagy lejárt meghívó" }, 404);
   }
 
-  if (invite.email && invite.email.toLowerCase() !== user.email.toLowerCase()) {
+  if (!invite.email || invite.email.toLowerCase() !== user.email.toLowerCase()) {
     return c.json({ error: "Ez a meghívó másik emailcímre szól" }, 403);
   }
 

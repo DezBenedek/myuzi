@@ -69,7 +69,11 @@ auth.post("/verify", async (c) => {
   }>();
   const email = normalizeEmail(body.email ?? "");
   const code = (body.code ?? "").trim();
-  const name = (body.name ?? "").trim();
+  const name = (body.name ?? "")
+    .trim()
+    .replace(/[<>&\u0000-\u001f]/g, "")
+    .trim()
+    .slice(0, 80);
 
   if (!email || !/^\d{6}$/.test(code)) {
     return c.json({ error: "Hibás kód" }, 400);
@@ -187,7 +191,9 @@ auth.post("/logout", requireAuth, async (c) => {
 auth.patch("/me", requireAuth, async (c) => {
   const body = await c.req.json<{ name?: string; email?: string; visionAssist?: boolean }>();
   const user = c.get("user");
-  const name = body.name?.trim() || user.name;
+  // Strip control / markup characters — names appear in web UI.
+  const rawName = (body.name?.trim() || user.name).replace(/[<>&\u0000-\u001f]/g, "").trim();
+  const name = rawName.slice(0, 80);
   if (name.length < 2) return c.json({ error: "A név túl rövid" }, 400);
 
   let email = user.email;
