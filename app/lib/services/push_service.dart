@@ -43,6 +43,7 @@ Future<void> _presentPush(
       callerName: fromName.isNotEmpty ? fromName : 'Bejövő hívás',
       callType: callType,
       conversationId: conversationId,
+      callerUserId: data['fromUserId']?.toString(),
       preferInApp: !fromBackground,
     );
     return;
@@ -73,6 +74,7 @@ void _queueFromRemoteMessage(RemoteMessage message) {
       callerName: fromName,
       callType: callType,
       conversation: conversationId,
+      callerUserId: data['fromUserId']?.toString(),
     );
   } else if (type == 'new_message' &&
       conversationId != null &&

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../call_navigation.dart';
 import '../pending_call_store.dart';
@@ -73,6 +74,9 @@ class AppNotify {
         description: 'Csengő bejövő hívásoknál',
         importance: Importance.max,
         playSound: true,
+        enableVibration: true,
+        // Helps OEMs treat this like a phone ring for full-screen intent.
+        audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
       ),
     );
 
@@ -81,8 +85,14 @@ class AppNotify {
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
 
-    // Normal launcher open: clear leftover ongoing call notification (not from FSI).
-    if (!fromNotification) {
+    // Normal launcher open: clear leftover ongoing call notification.
+    // Keep it if FSI / lock-arm woke the app (killed → full-screen incoming).
+    var armedForIncoming = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      armedForIncoming = prefs.getBool('incoming_call_lock') ?? false;
+    } catch (_) {}
+    if (!fromNotification && !armedForIncoming) {
       try {
         await _plugin.cancel(id: 42);
       } catch (_) {}
@@ -118,6 +128,7 @@ class AppNotify {
       final conversationId = map['conversationId']?.toString();
       final callerName = map['fromName']?.toString() ?? 'Családtag';
       final callType = map['callType']?.toString() ?? 'audio';
+      final callerUserId = map['fromUserId']?.toString();
 
       if ((type == 'incoming_call' || type == 'call') &&
           callId != null &&
@@ -129,6 +140,7 @@ class AppNotify {
             callerName: callerName,
             callType: callType,
             conversationId: conversationId,
+            callerUserId: callerUserId,
             action: 'accept',
           );
         } else if (actionId == 'decline') {
@@ -138,6 +150,7 @@ class AppNotify {
             callerName: callerName,
             callType: callType,
             conversationId: conversationId,
+            callerUserId: callerUserId,
             action: 'decline',
           );
         } else {
@@ -146,12 +159,14 @@ class AppNotify {
             callerName: callerName,
             callType: callType,
             conversation: conversationId,
+            callerUserId: callerUserId,
           );
           unawaitedStore(
             callId: callId,
             callerName: callerName,
             callType: callType,
             conversationId: conversationId,
+            callerUserId: callerUserId,
             action: 'ring',
           );
         }
@@ -168,6 +183,7 @@ class AppNotify {
     required String callerName,
     required String callType,
     String? conversationId,
+    String? callerUserId,
     required String action,
   }) {
     // ignore: discarded_futures
@@ -176,6 +192,7 @@ class AppNotify {
       callerName: callerName,
       callType: callType,
       conversationId: conversationId,
+      callerUserId: callerUserId,
       action: action,
     );
   }
@@ -225,6 +242,7 @@ class AppNotify {
     String? callType,
     String? conversationId,
     String? callerName,
+    String? callerUserId,
   }) async {
     if (!_ready) await init();
     final payload = jsonEncode({
@@ -233,6 +251,7 @@ class AppNotify {
       if (callType != null) 'callType': callType,
       if (conversationId != null) 'conversationId': conversationId,
       'fromName': callerName ?? title,
+      if (callerUserId != null) 'fromUserId': callerUserId,
     });
     await _plugin.show(
       id: 42,
@@ -251,6 +270,8 @@ class AppNotify {
           ongoing: true,
           autoCancel: false,
           visibility: NotificationVisibility.public,
+          audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
+          ticker: body,
           actions: <AndroidNotificationAction>[
             const AndroidNotificationAction(
               'decline',

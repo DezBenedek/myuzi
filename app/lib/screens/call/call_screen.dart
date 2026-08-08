@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_background/flutter_background.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/providers.dart';
 import 'call_controls.dart';
 import 'call_media.dart';
 import 'call_room_lifecycle.dart';
@@ -68,13 +69,28 @@ class _CallScreenState extends ConsumerState<CallScreen>
 
   @override
   void dispose() {
+    final shouldNotifyServer = !closing;
     closing = true;
     disposeCallLifecycle();
     disposeSpeakerFocus();
     final activeListener = listener;
     final activeRoom = room;
+    final callId = widget.callId;
+    final endEveryone = isDirect || (activeRoom?.remoteParticipants.isEmpty ?? true);
     listener = null;
     room = null;
+    if (shouldNotifyServer) {
+      final api = ref.read(apiProvider);
+      unawaited(() async {
+        try {
+          if (endEveryone) {
+            await api.endCall(callId);
+          } else {
+            await api.leaveCall(callId);
+          }
+        } catch (_) {}
+      }());
+    }
     if (screenShare && !kIsWeb && Platform.isAndroid) {
       unawaited(() async {
         try {

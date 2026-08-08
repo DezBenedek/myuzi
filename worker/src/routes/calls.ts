@@ -241,6 +241,7 @@ async function notifyIncomingCall(
     mode: CallMode;
     roomName: string;
     fromName: string;
+    fromUserId: string;
   },
 ): Promise<void> {
   const event = {
@@ -251,6 +252,7 @@ async function notifyIncomingCall(
     roomName: opts.roomName,
     conversationId: opts.conversationId,
     fromName: opts.fromName,
+    fromUserId: opts.fromUserId,
   };
   await Promise.all([
     publishToConversation(env, {
@@ -272,6 +274,7 @@ async function notifyIncomingCall(
         roomName: opts.roomName,
         conversationId: opts.conversationId,
         fromName: opts.fromName,
+        fromUserId: opts.fromUserId,
       },
     }),
   ]);
@@ -381,6 +384,7 @@ calls.post("/start", async (c) => {
         mode: existingCall.mode,
         roomName: existingCall.room_name,
         fromName: me.name,
+        fromUserId: me.id,
       }),
     );
     return c.json({ call: publicCall(c.env, existingCall, { token }) });
@@ -429,6 +433,7 @@ calls.post("/start", async (c) => {
       mode,
       roomName,
       fromName: me.name,
+      fromUserId: me.id,
     }),
   );
 
@@ -529,19 +534,19 @@ calls.post("/:id/leave", async (c) => {
 
   await removeLiveKitParticipant(c.env, call.room_name, userId);
 
-  // 1:1 — anyone leaving ends the call for both.
+  // After leave: end 1:1 always; end group if ≤1 participant left in room.
   if (call.mode === "direct") {
     const outcome = await finalizeCall(c.env, call);
     c.executionCtx.waitUntil(publishEnded(c.env, call, outcome));
     return c.json({ ok: true, ended: true, outcome, mode: call.mode });
   }
 
-  // Group — end only if room empty / alone after leave.
   const remaining = await countLiveKitParticipants(c.env, call.room_name);
-  if (remaining != null && remaining <= 0) {
+  // remaining null (API hiccup) or alone / empty → tear down so peers don't hang.
+  if (remaining == null || remaining <= 1) {
     const outcome = await finalizeCall(c.env, call);
     c.executionCtx.waitUntil(publishEnded(c.env, call, outcome));
-    return c.json({ ok: true, ended: true, outcome, mode: call.mode });
+    return c.json({ ok: true, ended: true, outcome, mode: call.mode, remaining });
   }
 
   if (call.conversation_id) {

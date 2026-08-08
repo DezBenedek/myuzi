@@ -55,6 +55,8 @@ class PendingCallAction {
   static String? ringCallId;
   static String? ringCallerName;
   static String? ringCallType;
+  static String? ringCallerUserId;
+  static String? ringCallerAvatarUrl;
   static String? acceptCallId;
   static String? declineCallId;
   static String? dismissCallId;
@@ -66,10 +68,14 @@ class PendingCallAction {
     String? callerName,
     String? callType,
     String? conversation,
+    String? callerUserId,
+    String? callerAvatarUrl,
   }) {
     ringCallId = id.trim().isEmpty ? null : id.trim();
     ringCallerName = callerName;
     ringCallType = callType ?? 'audio';
+    ringCallerUserId = callerUserId;
+    ringCallerAvatarUrl = callerAvatarUrl;
     conversationId = conversation;
     acceptCallId = null;
     declineCallId = null;
@@ -115,6 +121,8 @@ class PendingCallAction {
     ringCallId = null;
     ringCallerName = null;
     ringCallType = null;
+    ringCallerUserId = null;
+    ringCallerAvatarUrl = null;
     acceptCallId = null;
     declineCallId = null;
     dismissCallId = null;

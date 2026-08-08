@@ -5,8 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'call_navigation.dart';
 
 /// Persists incoming-call ring across isolates (FCM background ↔ main).
-/// Full-screen intent wakes MainActivity without a notification tap payload —
-/// so the host must read this store on resume.
 class PendingCallStore {
   PendingCallStore._();
 
@@ -17,7 +15,9 @@ class PendingCallStore {
     required String callerName,
     String callType = 'audio',
     String? conversationId,
-    String action = 'ring', // ring | accept | decline
+    String? callerUserId,
+    String? callerAvatarUrl,
+    String action = 'ring',
   }) async {
     final id = callId.trim();
     if (id.isEmpty) return;
@@ -29,6 +29,8 @@ class PendingCallStore {
         'callerName': callerName,
         'callType': callType,
         'conversationId': conversationId,
+        'callerUserId': callerUserId,
+        'callerAvatarUrl': callerAvatarUrl,
         'action': action,
         'at': DateTime.now().millisecondsSinceEpoch,
       }),
@@ -53,7 +55,6 @@ class PendingCallStore {
     }
   }
 
-  /// Apply persisted action into [PendingCallAction] (main isolate).
   static Future<bool> hydratePending() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
@@ -66,7 +67,6 @@ class PendingCallStore {
         return false;
       }
       final at = map['at'] as int? ?? 0;
-      // Drop stale rings (> 90s) — avoids hijacking a later normal app open.
       if (at > 0 &&
           DateTime.now().millisecondsSinceEpoch - at > 90 * 1000) {
         await prefs.remove(_key);
@@ -76,6 +76,8 @@ class PendingCallStore {
       final name = map['callerName']?.toString() ?? 'Családtag';
       final callType = map['callType']?.toString() ?? 'audio';
       final conversationId = map['conversationId']?.toString();
+      final callerUserId = map['callerUserId']?.toString();
+      final callerAvatarUrl = map['callerAvatarUrl']?.toString();
       if (action == 'accept') {
         PendingCallAction.setAccept(callId, conversation: conversationId);
       } else if (action == 'decline') {
@@ -86,6 +88,8 @@ class PendingCallStore {
           callerName: name,
           callType: callType,
           conversation: conversationId,
+          callerUserId: callerUserId,
+          callerAvatarUrl: callerAvatarUrl,
         );
       }
       return true;

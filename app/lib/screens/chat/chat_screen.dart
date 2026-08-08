@@ -40,6 +40,22 @@ class ChatScreenState extends ConsumerState<ChatScreen>
   StreamSubscription? rtSub;
   bool loadInFlight = false;
   bool callStarting = false;
+  bool _busyJoin = false;
+
+  /// Active/ringing call in this chat that we can join (not already on call UI).
+  VoiceMessage? get _joinableCall {
+    final me = ref.read(authProvider).user?.id;
+    if (me == null) return null;
+    for (final m in messages.reversed) {
+      if (!m.isCall) continue;
+      final status = m.callStatus;
+      if (status != 'ringing' && status != 'active') continue;
+      final callId = m.callId;
+      if (callId == null || callId.isEmpty) continue;
+      return m;
+    }
+    return null;
+  }
 
   @override
   int get maxRecordMs {
@@ -69,7 +85,9 @@ class ChatScreenState extends ConsumerState<ChatScreen>
       if (type == 'message_created' &&
           ev['conversationId'] == widget.conversationId) {
         unawaited(loadMessages(silent: true));
-      } else if ((type == 'call_updated' || type == 'call_ended') &&
+      } else if ((type == 'call_updated' ||
+              type == 'call_ended' ||
+              type == 'incoming_call') &&
           ev['conversationId'] == widget.conversationId) {
         unawaited(loadMessages(silent: true));
       }
@@ -222,6 +240,22 @@ class ChatScreenState extends ConsumerState<ChatScreen>
     );
   }
 
+  Future<void> _joinActiveCall(VoiceMessage m) async {
+    if (_busyJoin) return;
+    setState(() => _busyJoin = true);
+    try {
+      await joinCallFromChatEvent(
+        context: context,
+        api: ref.read(apiProvider),
+        router: ref.read(routerProvider),
+        message: m,
+        title: title,
+      );
+    } finally {
+      if (mounted) setState(() => _busyJoin = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(authProvider).user!.id;
@@ -233,16 +267,26 @@ class ChatScreenState extends ConsumerState<ChatScreen>
         title: Text(title),
         actions: [
           if (paid) ...[
-            IconButton(
-              tooltip: 'Hanghívás',
-              onPressed: () => startCall('audio'),
-              icon: const Icon(Icons.call),
-            ),
-            IconButton(
-              tooltip: 'Videó',
-              onPressed: () => startCall('video'),
-              icon: const Icon(Icons.videocam),
-            ),
+            if (_joinableCall != null)
+              TextButton(
+                onPressed: _busyJoin ? null : () => _joinActiveCall(_joinableCall!),
+                child: Text(
+                  _busyJoin ? 'Csatlakozás…' : 'Csatlakozás!',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              )
+            else ...[
+              IconButton(
+                tooltip: 'Hanghívás',
+                onPressed: () => startCall('audio'),
+                icon: const Icon(Icons.call),
+              ),
+              IconButton(
+                tooltip: 'Videó',
+                onPressed: () => startCall('video'),
+                icon: const Icon(Icons.videocam),
+              ),
+            ],
           ],
         ],
       ),

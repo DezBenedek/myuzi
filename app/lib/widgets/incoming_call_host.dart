@@ -114,18 +114,21 @@ class _IncomingCallHostState extends ConsumerState<IncomingCallHost>
 
     final ringId = PendingCallAction.ringCallId;
     if (ringId != null && ringId.isNotEmpty) {
-      if (_incomingCallId == ringId ||
-          loc == '/incoming/$ringId' ||
-          loc.startsWith('/call/')) {
+      if (loc == '/incoming/$ringId' || loc.startsWith('/call/')) {
         PendingCallAction.ringCallId = null;
+        _incomingCallId = ringId;
       } else {
         final name = PendingCallAction.ringCallerName ?? 'Családtag';
         final type = PendingCallAction.ringCallType ?? 'audio';
+        final callerUserId = PendingCallAction.ringCallerUserId;
+        final callerAvatarUrl = PendingCallAction.ringCallerAvatarUrl;
         PendingCallAction.ringCallId = null;
         _incomingCallId = ringId;
         router.go('/incoming/$ringId', extra: {
           'callerName': name,
           'callType': type,
+          if (callerUserId != null) 'callerUserId': callerUserId,
+          if (callerAvatarUrl != null) 'callerAvatarUrl': callerAvatarUrl,
         });
         unawaited(IncomingCallPresenter.onFullScreenShown(ringId));
         return;
@@ -186,7 +189,6 @@ class _IncomingCallHostState extends ConsumerState<IncomingCallHost>
 
     final id = event['callId'] as String?;
     if (id == null || id.isEmpty) return;
-    if (_incomingCallId == id || IncomingCallPresenter.isPresenting(id)) return;
 
     _incomingCallId = id;
     await IncomingCallPresenter.present(
@@ -194,6 +196,7 @@ class _IncomingCallHostState extends ConsumerState<IncomingCallHost>
       callerName: event['fromName'] as String? ?? 'Családtag',
       callType: event['callType'] as String? ?? 'audio',
       conversationId: event['conversationId'] as String?,
+      callerUserId: event['fromUserId'] as String?,
     );
   }
 
@@ -248,8 +251,9 @@ class _IncomingCallHostState extends ConsumerState<IncomingCallHost>
       _incomingCallId = id;
       await IncomingCallPresenter.present(
         callId: id,
-        callerName: 'Bejövő hívás',
+        callerName: PendingCallAction.ringCallerName ?? 'Bejövő hívás',
         callType: ringing['call_type'] as String? ?? 'audio',
+        callerUserId: PendingCallAction.ringCallerUserId,
       );
     } catch (_) {
     } finally {

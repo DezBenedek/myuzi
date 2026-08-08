@@ -81,6 +81,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             callId: state.pathParameters['id']!,
             callerName: extra['callerName'] as String? ?? 'Családtag',
             callType: extra['callType'] as String? ?? 'audio',
+            callerUserId: extra['callerUserId'] as String?,
+            callerAvatarUrl: extra['callerAvatarUrl'] as String?,
           );
         },
       ),

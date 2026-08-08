@@ -731,10 +731,8 @@ export function appCallPage(
     function onRemoteLeft() {
       if (!room || ending) return;
       if (room.remoteParticipants.size > 0) return;
-      if (isDirectCall()) {
-        statusEl.textContent = 'A másik fél kilépett';
-        endEverywhere();
-      }
+      statusEl.textContent = 'A másik fél kilépett';
+      endEverywhere();
     }
 
     function loadSdk(cb) {
@@ -784,7 +782,13 @@ export function appCallPage(
         room.on(Livekit.RoomEvent.ActiveSpeakersChanged, setActiveSpeakers);
         room.on(Livekit.RoomEvent.Disconnected, () => {
           if (talkTimer) clearInterval(talkTimer);
-          if (!ending) status.textContent = 'Lecsatlakozva';
+          if (!ending) {
+            status.textContent = 'Lecsatlakozva';
+            // Room torn down by peer/end — leave the page.
+            ending = true;
+            location.href = '/app';
+            return;
+          }
           renderGrid();
         });
         await room.connect(livekitUrl, token);

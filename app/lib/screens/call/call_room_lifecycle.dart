@@ -178,27 +178,16 @@ mixin CallRoomLifecycle on ConsumerState<CallScreen> {
 
   Future<void> _onRoomDisconnected() async {
     if (closing) return;
-    if (isDirect) {
-      await endForEveryone();
-    } else {
-      await leaveOnly();
-    }
+    // Always tell the worker — peer must not stay in a zombie call.
+    await endForEveryone();
   }
 
   void _onRemoteLeft() {
     final remotes = room?.remoteParticipants.length ?? 0;
     if (remotes > 0) return;
     _aloneTimer?.cancel();
-    // 1:1 (or only two people were talking): hang up for everyone.
-    if (isDirect || talkStartedAt != null) {
-      unawaited(endForEveryone());
-      return;
-    }
-    _aloneTimer = Timer(const Duration(seconds: 12), () {
-      if (closing) return;
-      final stillAlone = (room?.remoteParticipants.length ?? 0) == 0;
-      if (stillAlone) unawaited(endForEveryone());
-    });
+    // Anyone left alone → end for everyone (worker + peers).
+    unawaited(endForEveryone());
   }
 
   Future<void> _forceCloseLocal() async {
