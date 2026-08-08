@@ -13,16 +13,27 @@ export async function sendEmail(env: Env, payload: EmailPayload): Promise<void> 
     return;
   }
 
-  await env.EMAIL.send({
-    to: payload.to,
-    from: {
-      email: env.FROM_EMAIL,
-      name: env.APP_NAME,
-    },
-    subject: payload.subject,
-    html: payload.html,
-    text: payload.text,
-  });
+  const fromEmail = (env.FROM_EMAIL || "").trim();
+  if (!fromEmail || !fromEmail.includes("@")) {
+    console.error("[email] missing FROM_EMAIL");
+    throw new Error("Email küldő nincs beállítva");
+  }
+
+  try {
+    await env.EMAIL.send({
+      to: payload.to,
+      from: {
+        email: fromEmail,
+        name: env.APP_NAME || "MyÜzi",
+      },
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+    });
+  } catch (err) {
+    console.error("[email] send failed", payload.to, err);
+    throw new Error("Email küldés sikertelen");
+  }
 }
 
 export function loginCodeEmail(appName: string, name: string, code: string) {

@@ -109,31 +109,39 @@ export async function sendPush(
     kind: opts.kind ?? "message",
   };
 
-  const message = {
-    message: {
-      token: opts.token,
-      data,
-      notification: {
-        title: opts.title,
-        body: opts.body,
-      },
-      android: {
-        priority: "HIGH" as const,
-        ttl: isCall ? "60s" : "86400s",
-        notification: {
-          channelId: isCall ? "incoming_calls" : "messages",
-          sound: "default",
-          notificationPriority: isCall ? "PRIORITY_MAX" : "PRIORITY_HIGH",
-          ...(isCall
-            ? {
-                tag: `call_${opts.data?.callId ?? "incoming"}`,
-                sticky: true,
-              }
-            : {}),
+  // Calls: data-only high-priority so the Flutter background handler can show
+  // a native CallKit-style UI (system notification tap alone is not enough).
+  const message = isCall
+    ? {
+        message: {
+          token: opts.token,
+          data,
+          android: {
+            priority: "HIGH" as const,
+            ttl: "60s",
+          },
         },
-      },
-    },
-  };
+      }
+    : {
+        message: {
+          token: opts.token,
+          data,
+          notification: {
+            title: opts.title,
+            body: opts.body,
+          },
+          android: {
+            priority: "HIGH" as const,
+            ttl: "86400s",
+            notification: {
+              channelId: "messages",
+              sound: "default",
+              notificationPriority: "PRIORITY_HIGH",
+              clickAction: "FLUTTER_NOTIFICATION_CLICK",
+            },
+          },
+        },
+      };
 
   try {
     const accessToken = await getAccessToken(sa);

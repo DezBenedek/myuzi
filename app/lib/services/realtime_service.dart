@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 typedef RealtimeHandler = void Function(Map<String, dynamic> event);
+typedef RealtimeTicketProvider = Future<String> Function();
 
 /// Durable Object WebSocket client for inbox / chat / incoming calls.
 class RealtimeService {
@@ -15,8 +16,9 @@ class RealtimeService {
   Timer? _ping;
   Timer? _reconnect;
   String? _baseUrl;
-  String? _token;
+  RealtimeTicketProvider? _ticketProvider;
   bool _wanted = false;
+  bool _opening = false;
   int _backoffSec = 1;
   final _handlers = <RealtimeHandler>{};
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
@@ -27,11 +29,14 @@ class RealtimeService {
   void addHandler(RealtimeHandler handler) => _handlers.add(handler);
   void removeHandler(RealtimeHandler handler) => _handlers.remove(handler);
 
-  void connect({required String baseUrl, required String token}) {
+  void connect({
+    required String baseUrl,
+    required RealtimeTicketProvider ticketProvider,
+  }) {
     _baseUrl = baseUrl;
-    _token = token;
+    _ticketProvider = ticketProvider;
     _wanted = true;
-    _open();
+    unawaited(_open());
   }
 
   void disconnect() {
@@ -44,12 +49,14 @@ class RealtimeService {
     } catch (_) {}
     _channel = null;
     _sub = null;
+    _ticketProvider = null;
   }
 
-  void _open() {
+  Future<void> _open() async {
     final base = _baseUrl;
-    final token = _token;
-    if (!_wanted || base == null || token == null || token.isEmpty) return;
+    final ticketProvider = _ticketProvider;
+    if (!_wanted || _opening || base == null || ticketProvider == null) return;
+    _opening = true;
 
     _ping?.cancel();
     _sub?.cancel();
@@ -58,14 +65,17 @@ class RealtimeService {
     } catch (_) {}
     _channel = null;
 
-    final wsBase = base
-        .replaceFirst(RegExp(r'^https://'), 'wss://')
-        .replaceFirst(RegExp(r'^http://'), 'ws://');
-    final uri = Uri.parse('$wsBase/api/realtime/ws').replace(
-      queryParameters: {'token': token},
-    );
-
     try {
+      final ticket = await ticketProvider();
+      if (!_wanted) return;
+
+      final wsBase = base
+          .replaceFirst(RegExp(r'^https://'), 'wss://')
+          .replaceFirst(RegExp(r'^http://'), 'ws://');
+      final uri = Uri.parse('$wsBase/api/realtime/ws').replace(
+        queryParameters: {'ticket': ticket},
+      );
+
       final channel = WebSocketChannel.connect(uri);
       _channel = channel;
       _sub = channel.stream.listen(
@@ -96,8 +106,11 @@ class RealtimeService {
           _channel?.sink.add(jsonEncode({'type': 'ping'}));
         } catch (_) {}
       });
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[realtime] open failed: $e');
       _scheduleReconnect();
+    } finally {
+      _opening = false;
     }
   }
 
@@ -109,7 +122,7 @@ class RealtimeService {
     _reconnect?.cancel();
     final wait = _backoffSec;
     _backoffSec = (_backoffSec * 2).clamp(1, 30);
-    _reconnect = Timer(Duration(seconds: wait), _open);
+    _reconnect = Timer(Duration(seconds: wait), () => unawaited(_open()));
   }
 
   void dispose() {

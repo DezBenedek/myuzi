@@ -55,11 +55,50 @@ class AuthNotifier extends StateNotifier<AuthState> {
     unawaited(LocalCache.trimCaches());
     try {
       await _api.loadSession();
-      final user = await _api.me();
-      state = AuthState(user: user, loading: false);
+      final cached = await LocalCache.loadUser();
+      final hasToken = _api.token != null && _api.token!.isNotEmpty;
+
+      if (!hasToken) {
+        await LocalCache.clearUser();
+        state = const AuthState(loading: false);
+        return;
+      }
+
+      // Stay logged in offline with last known profile while we validate.
+      if (cached != null) {
+        state = AuthState(user: cached, loading: false);
+      }
+
+      try {
+        final user = await _api.me();
+        if (user != null) {
+          await LocalCache.saveUser(user);
+          state = AuthState(user: user, loading: false);
+        } else {
+          // Session rejected (401) — real logout.
+          await LocalCache.clearUser();
+          state = const AuthState(loading: false);
+        }
+      } on ApiException catch (e) {
+        if (e.statusCode == 401) {
+          await LocalCache.clearUser();
+          state = const AuthState(loading: false);
+          return;
+        }
+        // Network / server blip: keep cached session if we have one.
+        if (cached != null) {
+          state = AuthState(user: cached, loading: false);
+        } else {
+          state = const AuthState(loading: false);
+        }
+      } catch (_) {
+        if (cached != null) {
+          state = AuthState(user: cached, loading: false);
+        } else {
+          state = const AuthState(loading: false);
+        }
+      }
     } catch (_) {
-      // A temporary network failure must not leave the router permanently
-      // stuck in its loading state.
       state = const AuthState(loading: false);
     }
   }
@@ -76,6 +115,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
+  /// Resend login code (server enforces 30s cooldown).
+  Future<void> resendLoginCode() async {
+    final email = state.pendingEmail;
+    if (email == null || email.isEmpty) {
+      throw ApiException('Nincs folyamatban lévő belépés');
+    }
+    await _api.startLogin(email: email, visionAssist: state.pendingVision);
+  }
+
   Future<void> verify(String code, {String? name}) async {
     final email = state.pendingEmail;
     if (email == null) throw ApiException('Nincs folyamatban lévő belépés');
@@ -85,34 +133,49 @@ class AuthNotifier extends StateNotifier<AuthState> {
       name: name,
       visionAssist: state.pendingVision,
     );
+    await LocalCache.saveUser(user);
     state = AuthState(user: user, loading: false);
   }
 
   Future<void> refresh() async {
     try {
       final user = await _api.me();
+      if (user == null) {
+        await LocalCache.clearUser();
+        state = const AuthState(loading: false);
+        return;
+      }
+      await LocalCache.saveUser(user);
       state = AuthState(user: user, loading: false);
-    } catch (_) {
-      // Keep the current session/UI on transient failures.
-    }
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        await LocalCache.clearUser();
+        state = const AuthState(loading: false);
+      }
+      // Keep current UI on transient failures.
+    } catch (_) {}
   }
 
   Future<void> setVisionAssist(bool value) async {
     final user = await _api.updateMe(visionAssist: value);
+    await LocalCache.saveUser(user);
     state = state.copyWith(user: user);
   }
 
   Future<void> updateProfile({required String name, required String email}) async {
     final user = await _api.updateMe(name: name, email: email);
+    await LocalCache.saveUser(user);
     state = state.copyWith(user: user);
   }
 
   Future<void> setAvatar(models.User user) async {
+    await LocalCache.saveUser(user);
     state = state.copyWith(user: user);
   }
 
   Future<void> logout() async {
     await _api.logout();
+    await LocalCache.clearUser();
     state = const AuthState(loading: false);
   }
 }

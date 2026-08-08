@@ -77,14 +77,14 @@ async function sendLoginPin(
   env: Env,
   email: string,
   visionAssist = 0,
-): Promise<boolean> {
+): Promise<"ok" | "rate_limited"> {
   const recent = await env.DB.prepare(
     `SELECT 1 AS ok FROM auth_codes
-     WHERE email = ? AND created_at > datetime('now', '-60 seconds')`,
+     WHERE email = ? AND created_at > datetime('now', '-30 seconds')`,
   )
     .bind(email)
     .first<{ ok: number }>();
-  if (recent) return false;
+  if (recent) return "rate_limited";
 
   const existing = await getUserByEmail(env.DB, email);
   const displayName = existing?.name || "Felhasználó";
@@ -106,7 +106,7 @@ async function sendLoginPin(
     .run();
   const mail = loginCodeEmail(env.APP_NAME, displayName, code);
   await sendEmail(env, { to: email, ...mail });
-  return true;
+  return "ok";
 }
 
 async function acceptInviteForUser(
@@ -281,8 +281,8 @@ web.post("/login", async (c) => {
 
   try {
     const sent = await sendLoginPin(c.env, email, visionAssist);
-    if (!sent) {
-      return c.html(loginPage("Kérj új kódot egy perc múlva."), 429);
+    if (sent === "rate_limited") {
+      return c.html(verifyPage(email, "Kérj új kódot 30 másodperc múlva."), 429);
     }
   } catch (err) {
     console.error("[login email]", err);
@@ -831,9 +831,9 @@ web.get("/invite/:token", optionalAuth, async (c) => {
   if (invite.email) {
     try {
       const sent = await sendLoginPin(c.env, invite.email);
-      if (!sent) {
+      if (sent === "rate_limited") {
         return c.html(
-          inviteAcceptPage(invite.family_name, token, false, "Kérj új kódot egy perc múlva."),
+          inviteAcceptPage(invite.family_name, token, false, "Kérj új kódot 30 másodperc múlva."),
           429,
         );
       }
@@ -893,9 +893,9 @@ web.post("/invite/:token/start", async (c) => {
 
   try {
     const sent = await sendLoginPin(c.env, email);
-    if (!sent) {
+    if (sent === "rate_limited") {
       return c.html(
-        inviteEmailPage(invite.family_name, token, "Kérj új kódot egy perc múlva."),
+        inviteEmailPage(invite.family_name, token, "Kérj új kódot 30 másodperc múlva."),
         429,
       );
     }

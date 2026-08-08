@@ -5,7 +5,8 @@ import 'providers/providers.dart';
 import 'providers/theme_provider.dart';
 import 'router.dart';
 import 'services/app_notify.dart';
-import 'services/call_standby.dart';
+import 'services/call_navigation.dart';
+import 'services/pending_call_store.dart';
 import 'services/push_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/incoming_call_host.dart';
@@ -14,7 +15,13 @@ import 'widgets/offline_banner.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppNotify.init();
-  await CallStandby.init();
+  // Normal open (not from call notification): drop leftover ring state so
+  // startup isn't hijacked into /incoming.
+  if (PendingCallAction.ringCallId == null &&
+      PendingCallAction.acceptCallId == null &&
+      PendingCallAction.declineCallId == null) {
+    await PendingCallStore.clear();
+  }
   await PushService.init();
   runApp(const ProviderScope(child: MyUziApp()));
 }

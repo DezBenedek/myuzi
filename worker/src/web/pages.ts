@@ -191,6 +191,31 @@ export function verifyPage(
       ? `Meghívó: <strong>${escape(familyName)}</strong><br/>Kódot küldtünk ide: <strong>${escape(email)}</strong>`
       : `Kód: <strong>${escape(email)}</strong>`;
 
+  const resendBlock = askName
+    ? ""
+    : `
+      <form method="POST" action="/login" id="resendForm" style="margin-top:14px">
+        <input type="hidden" name="email" value="${escape(email)}" />
+        <button type="submit" class="ghost" id="resendBtn" disabled>Új kód 30 mp múlva</button>
+      </form>
+      <script>
+      (function(){
+        var btn = document.getElementById('resendBtn');
+        if (!btn) return;
+        var left = 30;
+        var t = setInterval(function(){
+          left -= 1;
+          if (left <= 0) {
+            clearInterval(t);
+            btn.disabled = false;
+            btn.textContent = 'Új kód küldése';
+          } else {
+            btn.textContent = 'Új kód ' + left + ' mp múlva';
+          }
+        }, 1000);
+      })();
+      </script>`;
+
   return layout(
     askName ? "Becenév" : familyName ? "Meghívó" : "Kód",
     `
@@ -212,6 +237,7 @@ export function verifyPage(
         }
         ${error ? `<p class="error">${escape(error)}</p>` : ""}
       </form>
+      ${resendBlock}
     </div>
   `,
   );

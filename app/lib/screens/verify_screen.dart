@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,19 +21,71 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
   final _name = TextEditingController();
   bool _busy = false;
   bool _askName = false;
+  bool _resendBusy = false;
   String? _error;
+  String? _info;
+  int _resendIn = 30;
+  Timer? _resendTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _startResendCooldown();
+  }
 
   @override
   void dispose() {
+    _resendTimer?.cancel();
     _code.dispose();
     _name.dispose();
     super.dispose();
+  }
+
+  void _startResendCooldown([int seconds = 30]) {
+    _resendTimer?.cancel();
+    setState(() => _resendIn = seconds);
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_resendIn <= 1) {
+        t.cancel();
+        setState(() => _resendIn = 0);
+      } else {
+        setState(() => _resendIn -= 1);
+      }
+    });
+  }
+
+  Future<void> _resend() async {
+    if (_resendBusy || _resendIn > 0 || _askName) return;
+    setState(() {
+      _resendBusy = true;
+      _error = null;
+      _info = null;
+    });
+    try {
+      await ref.read(authProvider.notifier).resendLoginCode();
+      if (!mounted) return;
+      setState(() => _info = 'Új kódot küldtünk.');
+      _startResendCooldown(30);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.message);
+      if (e.statusCode == 429) _startResendCooldown(30);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Nem sikerült új kódot küldeni');
+    } finally {
+      if (mounted) setState(() => _resendBusy = false);
+    }
   }
 
   Future<void> _submit() async {
     setState(() {
       _busy = true;
       _error = null;
+      _info = null;
     });
     try {
       await ref.read(authProvider.notifier).verify(
@@ -60,6 +114,8 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
   Widget build(BuildContext context) {
     final auth = ref.watch(authProvider);
     final t = Theme.of(context);
+    final canResend = !_askName && _resendIn == 0 && !_resendBusy && !_busy;
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -115,6 +171,10 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
               const SizedBox(height: 12),
               Text(_error!, style: TextStyle(color: t.colorScheme.error, fontWeight: FontWeight.w700)),
             ],
+            if (_info != null) ...[
+              const SizedBox(height: 12),
+              Text(_info!, style: TextStyle(color: t.colorScheme.primary, fontWeight: FontWeight.w700)),
+            ],
             const SizedBox(height: 24),
             BigButton(
               label: _busy
@@ -125,6 +185,22 @@ class _VerifyScreenState extends ConsumerState<VerifyScreen> {
               icon: Icons.check_circle_outline,
               onPressed: _busy ? null : _submit,
             ),
+            if (!_askName) ...[
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: canResend ? _resend : null,
+                child: Text(
+                  _resendBusy
+                      ? 'Küldés…'
+                      : _resendIn > 0
+                          ? 'Új kód $_resendIn mp múlva'
+                          : 'Új kód küldése',
+                  style: t.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

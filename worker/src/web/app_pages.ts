@@ -41,20 +41,36 @@ const appCss = `
 .composer button { margin-top:0; width:auto; min-width:120px; }
 #recHint { color:var(--muted); font-weight:650; }
 .video-grid {
-  display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; min-height:50vh;
+  display:grid; gap:10px; min-height:58vh;
   background:#0b1a14; border-radius:16px; padding:10px; margin:12px 0;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
 }
+.video-grid.count-1 { grid-template-columns:1fr; }
+.video-grid.count-2 {
+  grid-template-columns:1fr;
+  grid-template-rows:1fr auto;
+  min-height:62vh;
+}
+.video-grid.count-2 .lk-tile.remote {
+  min-height:48vh;
+}
+.video-grid.count-2 .lk-tile.local {
+  width:min(180px, 42vw); min-height:120px; justify-self:end;
+}
+.video-grid.count-3, .video-grid.count-4 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+.video-grid.count-5, .video-grid.count-6 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
 .video-grid video, .video-grid .lk-tile {
   width:100%; min-height:220px; background:#12261c; border-radius:12px; object-fit:cover;
+}
+.video-grid .lk-media { width:100%; height:100%; min-height:inherit; }
+.video-grid .lk-media video, .video-grid .lk-media audio {
+  width:100%; height:100%; min-height:inherit; object-fit:cover; display:block;
 }
 .video-grid .lk-tile { position:relative; overflow:hidden; border:1px solid transparent; }
 .video-grid .lk-tile.active { border-color:#3ddc97; box-shadow:0 0 0 2px #3ddc9744; }
 .video-grid .lk-tile .lk-name {
   position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px;
-  background:#0009; color:#fff; font-size:.85rem;
-}
-@media (min-width: 760px) {
-  .video-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  background:#0009; color:#fff; font-size:.85rem; z-index:2;
 }
 .call-controls { display:flex; gap:10px; flex-wrap:wrap; }
 .call-controls button { width:auto; flex:1; min-width:110px; margin-top:0; }
@@ -515,7 +531,7 @@ export function appCallPage(
     <h1 class="brand" style="font-size:1.6rem">${escape(opts.title || "Hívás")}</h1>
     <p class="hint">${opts.callType === "video" ? "Videóhívás" : "Hanghívás"}</p>
     <div id="status" class="hint">Csatlakozás…</div>
-    <div class="video-grid" id="grid"></div>
+    <div class="video-grid count-1" id="grid"></div>
     <div class="call-controls">
       <button type="button" id="micBtn" class="secondary">Mikrofon</button>
       <button type="button" id="camBtn" class="secondary" ${opts.callType === "video" ? "" : "disabled"}>Kamera</button>
@@ -526,13 +542,14 @@ export function appCallPage(
     const callId = ${JSON.stringify(callId)};
     const isVideo = ${opts.callType === "video" ? "true" : "false"};
     let room = null;
+    let callMode = 'group';
     let micOn = true;
     let camOn = isVideo;
     let ending = false;
     let talkStartedAt = null;
     let talkTimer = null;
     const participantTiles = new Map();
-    const trackOwners = new Map();
+    const attachedTracks = new WeakSet();
     const grid = document.getElementById('grid');
     const statusEl = document.getElementById('status');
 
@@ -551,16 +568,22 @@ export function appCallPage(
       statusEl.textContent = 'Kapcsolódva · 0:00';
     }
 
-    function loadSdk(cb) {
-      if (window.LivekitClient) return cb();
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.10.0/dist/livekit-client.umd.min.js';
-      s.crossOrigin = 'anonymous';
-      s.onload = cb;
-      s.onerror = () => { document.getElementById('status').textContent = 'LiveKit SDK betöltése sikertelen'; };
-      document.head.appendChild(s);
+    function uniqueParticipants() {
+      if (!room) return [];
+      const byId = new Map();
+      const local = room.localParticipant;
+      if (local && local.identity) byId.set(String(local.identity), local);
+      for (const p of room.remoteParticipants.values()) {
+        const id = String(p.identity || '');
+        if (!id || byId.has(id)) continue;
+        byId.set(id, p);
+      }
+      return Array.from(byId.values());
     }
-    loadSdk(connect);
+
+    function isDirectCall() {
+      return callMode === 'direct' || uniqueParticipants().length <= 2;
+    }
 
     function ensureTile(participant) {
       const id = String(participant?.identity || '');
@@ -573,7 +596,9 @@ export function appCallPage(
       media.className = 'lk-media';
       const name = document.createElement('span');
       name.className = 'lk-name';
-      name.textContent = participant.name || id;
+      const label = participant.name || id;
+      const isLocal = participant === room?.localParticipant;
+      name.textContent = isLocal ? (label + ' (te)') : label;
       tile.appendChild(media);
       tile.appendChild(name);
       tile.media = media;
@@ -585,26 +610,38 @@ export function appCallPage(
 
     function renderGrid() {
       if (!room) return;
-      const participants = [
-        room.localParticipant,
-        ...Array.from(room.remoteParticipants.values()),
-      ].filter(Boolean);
-      participants.sort((a, b) => {
-        if (a === room.localParticipant) return -1;
-        if (b === room.localParticipant) return 1;
+      const local = room.localParticipant;
+      const localId = local ? String(local.identity) : '';
+      let people = uniqueParticipants();
+      people.sort((a, b) => {
+        const aLocal = a === local;
+        const bLocal = b === local;
+        if (aLocal !== bLocal) return aLocal ? 1 : -1; // remote first for 1:1 spotlight
         return String(a.identity).localeCompare(String(b.identity));
       });
-      const visible = participants.slice(0, 6);
-      grid.replaceChildren(...visible.map((p) => ensureTile(p)));
-      const visibleIds = new Set(visible.map((p) => String(p.identity)));
-      for (const [id, tile] of participantTiles) {
-        if (!visibleIds.has(id) && !room.remoteParticipants.get(id)) {
-          tile.tracks.forEach((node, track) => {
-            node.remove();
-            trackOwners.delete(track);
-          });
-          participantTiles.delete(id);
-        }
+      if (isDirectCall()) people = people.slice(0, 2);
+
+      const n = Math.max(1, Math.min(6, people.length));
+      grid.className = 'video-grid count-' + n;
+      const tiles = people.map((p) => {
+        const tile = ensureTile(p);
+        if (!tile) return null;
+        const localTile = p === local || String(p.identity) === localId;
+        tile.classList.toggle('local', localTile);
+        tile.classList.toggle('remote', !localTile);
+        return tile;
+      }).filter(Boolean);
+      grid.replaceChildren(...tiles);
+
+      const visibleIds = new Set(people.map((p) => String(p.identity)));
+      for (const [id, tile] of [...participantTiles.entries()]) {
+        if (visibleIds.has(id)) continue;
+        tile.tracks.forEach((node, track) => {
+          try { track.detach(); } catch {}
+          node.remove();
+          attachedTracks.delete?.(track);
+        });
+        participantTiles.delete(id);
       }
     }
 
@@ -614,16 +651,38 @@ export function appCallPage(
     }
 
     function attachTrack(track, participant) {
+      if (!track || !participant) return;
+      if (attachedTracks.has(track)) {
+        renderGrid();
+        return;
+      }
       const tile = ensureTile(participant);
       if (!tile) return;
-      trackOwners.set(track, tile.identity);
+      if (tile.tracks.has(track)) {
+        renderGrid();
+        return;
+      }
+      attachedTracks.add(track);
       if (track.kind === 'audio') {
+        if (participant === room.localParticipant) {
+          renderGrid();
+          return; // no local echo
+        }
         const a = track.attach();
         a.autoplay = true;
         a.playsInline = true;
         tile.media.appendChild(a);
         tile.tracks.set(track, a);
       } else if (track.kind === 'video') {
+        // One video element per tile (camera only — skip duplicate pubs).
+        for (const [existing, node] of [...tile.tracks.entries()]) {
+          if (existing.kind === 'video') {
+            try { existing.detach(); } catch {}
+            node.remove();
+            tile.tracks.delete(existing);
+            attachedTracks.delete?.(existing);
+          }
+        }
         const v = track.attach();
         v.autoplay = true;
         v.playsInline = true;
@@ -635,17 +694,62 @@ export function appCallPage(
     }
 
     function detachTrack(track, participant) {
-      const id = String(participant?.identity || trackOwners.get(track) || '');
+      const id = String(participant?.identity || '');
       const tile = participantTiles.get(id);
-      track.detach().forEach((node) => node.remove());
+      try { track.detach().forEach((node) => node.remove()); } catch {}
       if (tile) tile.tracks.delete(track);
-      trackOwners.delete(track);
+      try { attachedTracks.delete(track); } catch {}
       renderGrid();
     }
 
+    async function endEverywhere() {
+      if (ending) return;
+      ending = true;
+      try {
+        await api('/api/calls/'+callId+'/end', { method:'POST', json: {} });
+      } catch {}
+      try { await room?.disconnect(); } catch {}
+      location.href = '/app';
+    }
+
+    async function leaveOrEnd() {
+      if (ending) return;
+      if (isDirectCall()) {
+        await endEverywhere();
+        return;
+      }
+      ending = true;
+      try {
+        await api('/api/calls/'+callId+'/leave', { method:'POST', json: {} });
+      } catch {
+        try { await api('/api/calls/'+callId+'/end', { method:'POST', json: {} }); } catch {}
+      }
+      try { await room?.disconnect(); } catch {}
+      location.href = '/app';
+    }
+
+    function onRemoteLeft() {
+      if (!room || ending) return;
+      if (room.remoteParticipants.size > 0) return;
+      if (isDirectCall()) {
+        statusEl.textContent = 'A másik fél kilépett';
+        endEverywhere();
+      }
+    }
+
+    function loadSdk(cb) {
+      if (window.LivekitClient) return cb();
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2.10.0/dist/livekit-client.umd.min.js';
+      s.crossOrigin = 'anonymous';
+      s.onload = cb;
+      s.onerror = () => { document.getElementById('status').textContent = 'LiveKit SDK betöltése sikertelen'; };
+      document.head.appendChild(s);
+    }
+    loadSdk(connect);
+
     async function connect() {
       const status = document.getElementById('status');
-      const grid = document.getElementById('grid');
       const Livekit = window.LivekitClient;
       if (!Livekit) {
         status.textContent = 'LiveKit SDK hiányzik.';
@@ -654,6 +758,7 @@ export function appCallPage(
       try {
         const data = await api('/api/calls/' + callId + '/join', { method: 'POST', json: {} });
         const call = data.call;
+        callMode = call.mode === 'direct' ? 'direct' : 'group';
         const livekitUrl = call.livekitUrl;
         const token = call.token;
         if (!livekitUrl || !token) throw new Error('Hiányzó hívási adatok');
@@ -672,21 +777,20 @@ export function appCallPage(
           renderGrid();
           maybeStartTalkTimer();
         });
-        room.on(Livekit.RoomEvent.ParticipantDisconnected, renderGrid);
+        room.on(Livekit.RoomEvent.ParticipantDisconnected, () => {
+          renderGrid();
+          onRemoteLeft();
+        });
         room.on(Livekit.RoomEvent.ActiveSpeakersChanged, setActiveSpeakers);
         room.on(Livekit.RoomEvent.Disconnected, () => {
           if (talkTimer) clearInterval(talkTimer);
-          status.textContent = 'Lecsatlakozva';
+          if (!ending) status.textContent = 'Lecsatlakozva';
           renderGrid();
         });
         await room.connect(livekitUrl, token);
         await room.localParticipant.setMicrophoneEnabled(true);
         if (isVideo) await room.localParticipant.setCameraEnabled(true);
-        room.localParticipant.videoTrackPublications.forEach(pub => {
-          if (pub.track) {
-            attachTrack(pub.track, room.localParticipant);
-          }
-        });
+        // Local tracks come via LocalTrackPublished — do not double-attach here.
         renderGrid();
         if (room.remoteParticipants.size > 0) {
           maybeStartTalkTimer();
@@ -723,16 +827,7 @@ export function appCallPage(
         camOn = !camOn;
       }
     };
-    document.getElementById('endBtn').onclick = async () => {
-      if (ending) return;
-      ending = true;
-      document.getElementById('endBtn').disabled = true;
-      try {
-        await api('/api/calls/'+callId+'/end', { method:'POST', json: {} });
-      } catch {}
-      try { await room?.disconnect(); } catch {}
-      location.href = '/app';
-    };
+    document.getElementById('endBtn').onclick = () => leaveOrEnd();
     </script>
   `,
   );

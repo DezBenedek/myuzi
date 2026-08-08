@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
-import '../services/call_standby.dart';
+import '../services/call_navigation.dart';
 import '../services/push_service.dart';
 import '../services/realtime_service.dart';
 
@@ -13,7 +13,8 @@ final realtimeProvider = Provider<RealtimeService>((ref) {
   return service;
 });
 
-/// Connects Durable Object WS + Android standby + FCM when logged in.
+/// Connects Durable Object WS + FCM when logged in.
+/// (No CallStandby FGS — it conflicted with call accept / crashed the app.)
 final realtimeLifecycleProvider = Provider<void>((ref) {
   final auth = ref.watch(authProvider);
   final api = ref.watch(apiProvider);
@@ -22,7 +23,7 @@ final realtimeLifecycleProvider = Provider<void>((ref) {
   if (auth.loading) return;
   if (!auth.isLoggedIn) {
     realtime.disconnect();
-    unawaited(CallStandby.stop());
+    PendingCallAction.clear();
     unawaited(PushService.clear());
     return;
   }
@@ -30,7 +31,9 @@ final realtimeLifecycleProvider = Provider<void>((ref) {
   final token = api.token;
   if (token == null || token.isEmpty) return;
 
-  realtime.connect(baseUrl: api.baseUrl, token: token);
-  unawaited(CallStandby.start());
+  realtime.connect(
+    baseUrl: api.baseUrl,
+    ticketProvider: () => api.realtimeTicket(),
+  );
   unawaited(PushService.syncToken(api));
 });

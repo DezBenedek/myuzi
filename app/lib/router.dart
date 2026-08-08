@@ -6,6 +6,7 @@ import '../providers/providers.dart';
 import '../screens/call_screen.dart';
 import '../screens/chat_screen.dart';
 import '../screens/home_screen.dart';
+import '../screens/incoming_call_screen.dart';
 import '../screens/invite_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/onboarding_screen.dart';
@@ -53,7 +54,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       final onboarding = loc == '/onboarding';
 
       if (familyAsync.isLoading) return null;
-      if (family == null && !onboarding && !loc.startsWith('/invite/')) {
+      if (family == null &&
+          !onboarding &&
+          !loc.startsWith('/invite/') &&
+          !loc.startsWith('/incoming/') &&
+          !loc.startsWith('/call/')) {
         return '/onboarding';
       }
       if (family != null && onboarding) return '/';
@@ -69,6 +74,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) => ChatScreen(conversationId: state.pathParameters['id']!),
       ),
       GoRoute(
+        path: '/incoming/:id',
+        builder: (_, state) {
+          final extra = state.extra as Map<String, dynamic>? ?? {};
+          return IncomingCallScreen(
+            callId: state.pathParameters['id']!,
+            callerName: extra['callerName'] as String? ?? 'Családtag',
+            callType: extra['callType'] as String? ?? 'audio',
+          );
+        },
+      ),
+      GoRoute(
         path: '/call/:id',
         builder: (_, state) {
           final extra = state.extra as Map<String, dynamic>? ?? {};
@@ -78,6 +94,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             token: extra['token'] as String? ?? '',
             callType: extra['callType'] as String? ?? 'audio',
             title: extra['title'] as String? ?? 'Hívás',
+            mode: extra['mode'] as String? ?? 'group',
           );
         },
       ),

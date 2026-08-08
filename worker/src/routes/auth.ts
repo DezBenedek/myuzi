@@ -36,12 +36,12 @@ auth.post("/start", async (c) => {
 
   const recent = await c.env.DB.prepare(
     `SELECT 1 AS ok FROM auth_codes
-     WHERE email = ? AND created_at > datetime('now', '-60 seconds')`,
+     WHERE email = ? AND created_at > datetime('now', '-30 seconds')`,
   )
     .bind(email)
     .first<{ ok: number }>();
   if (recent) {
-    return c.json({ error: "Kérj új kódot egy perc múlva." }, 429);
+    return c.json({ error: "Kérj új kódot 30 másodperc múlva." }, 429);
   }
 
   const existing = await getUserByEmail(c.env.DB, email);
@@ -67,9 +67,19 @@ auth.post("/start", async (c) => {
     .run();
 
   const mail = loginCodeEmail(c.env.APP_NAME, displayName, code);
-  await sendEmail(c.env, { to: email, ...mail });
+  try {
+    await sendEmail(c.env, { to: email, ...mail });
+  } catch (err) {
+    console.error("[auth/start email]", err);
+    // Keep the code so a quick retry / resend can work after cooldown;
+    // surface a clear error to the client.
+    return c.json(
+      { error: "A kód küldése nem sikerült. Próbáld újra 30 mp múlva." },
+      502,
+    );
+  }
 
-  return c.json({ ok: true, email, isNew });
+  return c.json({ ok: true, email, isNew, resendAfterSec: 30 });
 });
 
 auth.post("/verify", async (c) => {
