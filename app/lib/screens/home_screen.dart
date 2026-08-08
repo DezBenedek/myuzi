@@ -10,6 +10,7 @@ import '../providers/providers.dart';
 import '../services/api_client.dart';
 import '../services/app_notify.dart';
 import '../services/toast.dart';
+import '../widgets/qr_sheet.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/widgets.dart';
 
@@ -25,6 +26,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _incomingCallId;
   int? _lastUnreadTotal;
   bool _sheetOpen = false;
+  final _seenInviteTokens = <String>{};
 
   @override
   void initState() {
@@ -41,7 +43,71 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _tick() async {
-    await Future.wait([_checkIncoming(), _refreshUnread()]);
+    await Future.wait([_checkIncoming(), _refreshUnread(), _checkInviteInbox()]);
+  }
+
+  Future<void> _checkInviteInbox() async {
+    final auth = ref.read(authProvider);
+    if (!auth.isLoggedIn || _sheetOpen) return;
+    try {
+      final invites = await ref.read(apiProvider).inviteInbox();
+      if (!mounted || invites.isEmpty) return;
+      for (final inv in invites) {
+        final token = inv['token'] as String?;
+        if (token == null || _seenInviteTokens.contains(token)) continue;
+        _seenInviteTokens.add(token);
+        if (!mounted) return;
+        final go = await showModalBottomSheet<bool>(
+          context: context,
+          showDragHandle: true,
+          builder: (ctx) {
+            final t = Theme.of(ctx);
+            final familyName = inv['familyName'] as String? ?? 'család';
+            final from = inv['invitedByName'] as String? ?? 'Valaki';
+            final needsLeave = inv['needsLeave'] == true;
+            final current = inv['currentFamilyName'] as String?;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('Családi meghívó', style: t.textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    Text(
+                      '$from meghívott a(z) $familyName családba.',
+                      style: t.textTheme.bodyLarge,
+                    ),
+                    if (needsLeave) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Ehhez ki kell lépned a(z) ${current ?? "jelenlegi"} családból.',
+                        style: TextStyle(color: t.colorScheme.error),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    BigButton(
+                      label: 'Megnézem',
+                      icon: Icons.mail_outline,
+                      onPressed: () => Navigator.pop(ctx, true),
+                    ),
+                    const SizedBox(height: 8),
+                    BigButton(
+                      label: 'Később',
+                      outlined: true,
+                      onPressed: () => Navigator.pop(ctx, false),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+        if (go == true && mounted) context.push('/invite/$token');
+        return;
+      }
+    } catch (_) {}
   }
 
   Future<void> _refreshUnread() async {
@@ -377,6 +443,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                ListTile(
+                  leading: const Icon(Icons.qr_code_2),
+                  title: const Text('QR kód'),
+                  subtitle: const Text('Saját kód mutatása vagy beolvasás'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    showMyQrSheet(context, ref);
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.mail_outline),
                   title: const Text('Email / kapcsolat'),

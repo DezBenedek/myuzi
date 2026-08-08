@@ -90,4 +90,35 @@ export function canAddMember(family: FamilyRow, count: number): boolean {
   return count < maxMembersForPlan(family.plan);
 }
 
+/**
+ * Leave the user's current family.
+ * Owner may only leave if they are the sole member (family is dissolved).
+ */
+export async function leaveCurrentFamily(
+  db: D1Database,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const fam = await getUserFamily(db, userId);
+  if (!fam) return { ok: true };
+
+  if (fam.owner_id === userId) {
+    const count = await memberCount(db, fam.id);
+    if (count > 1) {
+      return {
+        ok: false,
+        error:
+          "Tulajdonosként nem léphetsz ki, amíg mások is a családban vannak. Előbb távolítsd el a tagokat.",
+      };
+    }
+    await db.prepare("DELETE FROM families WHERE id = ?").bind(fam.id).run();
+    return { ok: true };
+  }
+
+  await db
+    .prepare("DELETE FROM family_members WHERE family_id = ? AND user_id = ?")
+    .bind(fam.id, userId)
+    .run();
+  return { ok: true };
+}
+
 export { hasPaidPlan, voiceMaxMsForPlan };

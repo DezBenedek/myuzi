@@ -19,6 +19,7 @@ import {
   getUserFamily,
   hasPaidPlan,
   isFamilyMember,
+  leaveCurrentFamily,
   memberCount,
 } from "../lib/db";
 import { inviteEmail, loginCodeEmail, sendEmail } from "../lib/email";
@@ -36,6 +37,7 @@ import {
   plansPage,
   verifyPage,
 } from "../web/pages";
+import { appCallPage, appChatPage, appInboxPage, userQrPage } from "../web/app_pages";
 import type { UserRow } from "../types";
 
 const web = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -46,6 +48,7 @@ type InviteRow = {
   status: string;
   expires_at: string;
   email: string | null;
+  target_user_id?: string | null;
   family_name?: string;
 };
 
@@ -80,10 +83,20 @@ async function acceptInviteForUser(
   db: D1Database,
   invite: InviteRow,
   user: UserRow,
-): Promise<{ ok: true } | { ok: false; error: string; familyName: string }> {
+  opts: { confirmLeave?: boolean } = {},
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      familyName: string;
+      needsLeaveConfirmation?: boolean;
+      currentFamilyName?: string;
+    }
+> {
   const family = await getFamily(db, invite.family_id);
   if (!family) return { ok: false, error: "A család nem található.", familyName: "" };
-  if (invite.email && invite.email !== user.email) {
+  if (invite.email && invite.email.toLowerCase() !== user.email.toLowerCase()) {
     return {
       ok: false,
       error: `Ez a meghívó a(z) ${invite.email} címre szól.`,
@@ -91,16 +104,24 @@ async function acceptInviteForUser(
     };
   }
   const existingFamily = await getUserFamily(db, user.id);
-  if (existingFamily && existingFamily.id !== family.id) {
-    return {
-      ok: false,
-      error: "Már egy másik családban vagy.",
-      familyName: family.name,
-    };
-  }
   if (existingFamily?.id === family.id) {
     await db.prepare(`UPDATE invites SET status = 'accepted' WHERE id = ?`).bind(invite.id).run();
     return { ok: true };
+  }
+  if (existingFamily && existingFamily.id !== family.id) {
+    if (!opts.confirmLeave) {
+      return {
+        ok: false,
+        error: `Már a(z) ${existingFamily.name} család tagja vagy. Elfogadáshoz ki kell lépned.`,
+        familyName: family.name,
+        needsLeaveConfirmation: true,
+        currentFamilyName: existingFamily.name,
+      };
+    }
+    const left = await leaveCurrentFamily(db, user.id);
+    if (!left.ok) {
+      return { ok: false, error: left.error, familyName: family.name };
+    }
   }
   const count = await memberCount(db, family.id);
   if (!canAddMember(family, count)) {
@@ -135,6 +156,39 @@ function setSessionCookie(c: { header: (k: string, v: string) => void }, token: 
 }
 
 web.get("/", (c) => c.html(landingPage()));
+
+web.get("/app", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login?next=/app");
+  return c.html(appInboxPage(user));
+});
+
+web.get("/app/chat/:id", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect(`/login?next=/app/chat/${c.req.param("id")}`);
+  const name = c.req.query("name") || "Beszélgetés";
+  return c.html(appChatPage(user, c.req.param("id"), name));
+});
+
+web.get("/app/call/:id", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login?next=/app");
+  return c.html(
+    appCallPage(user, {
+      callId: c.req.param("id"),
+      livekitUrl: c.req.query("url") || c.env.LIVEKIT_URL,
+      token: c.req.query("token") || "",
+      callType: c.req.query("type") === "video" ? "video" : "audio",
+      title: c.req.query("title") || "Hívás",
+    }),
+  );
+});
+
+web.get("/u/:userId", optionalAuth, async (c) => {
+  const userId = c.req.param("userId");
+  const me = c.get("user");
+  return c.html(userQrPage({ userId, meId: me?.id ?? null, loggedIn: !!me }));
+});
 
 web.get("/login", (c) => c.html(loginPage()));
 
@@ -283,13 +337,17 @@ web.post("/login/verify", async (c) => {
       const result = await acceptInviteForUser(c.env.DB, invite, user!);
       if (!result.ok) {
         return c.html(
-          inviteAcceptPage(result.familyName || "család", inviteToken, true, result.error),
+          inviteAcceptPage(result.familyName || "család", inviteToken, true, result.error, {
+            needsLeaveConfirmation: result.needsLeaveConfirmation,
+            currentFamilyName: result.currentFamilyName,
+          }),
         );
       }
+      return c.redirect("/app");
     }
   }
 
-  return c.redirect("/account");
+  return c.redirect("/app");
 });
 
 web.post("/logout", async (c) => {
@@ -707,9 +765,14 @@ web.get("/invite/:token", optionalAuth, async (c) => {
   if (user) {
     const result = await acceptInviteForUser(c.env.DB, invite, user);
     if (!result.ok) {
-      return c.html(inviteAcceptPage(result.familyName || invite.family_name, token, true, result.error));
+      return c.html(
+        inviteAcceptPage(result.familyName || invite.family_name, token, true, result.error, {
+          needsLeaveConfirmation: result.needsLeaveConfirmation,
+          currentFamilyName: result.currentFamilyName,
+        }),
+      );
     }
-    return c.redirect("/account");
+    return c.redirect("/app");
   }
 
   // Not logged in: send PIN immediately when invite has an email.
@@ -801,14 +864,20 @@ web.post("/invite/:token/accept", optionalAuth, async (c) => {
     return c.redirect("/");
   }
 
-  const result = await acceptInviteForUser(c.env.DB, invite, user);
+  const form = await c.req.parseBody();
+  const confirmLeave = String(form.confirmLeave ?? "") === "1";
+
+  const result = await acceptInviteForUser(c.env.DB, invite, user, { confirmLeave });
   if (!result.ok) {
     return c.html(
-      inviteAcceptPage(result.familyName || "család", token, true, result.error),
+      inviteAcceptPage(result.familyName || "család", token, true, result.error, {
+        needsLeaveConfirmation: result.needsLeaveConfirmation,
+        currentFamilyName: result.currentFamilyName,
+      }),
     );
   }
 
-  return c.redirect("/account");
+  return c.redirect("/app");
 });
 
 export default web;

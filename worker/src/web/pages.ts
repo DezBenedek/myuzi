@@ -136,12 +136,13 @@ export function landingPage(): string {
     "Kezdőlap",
     `
     <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Családi hangüzenetek és hívások.</p>
+    <p class="sub">Családi hangüzenetek és hívások — appban és a weben.</p>
     <div class="panel">
       <div class="row">
-        <a href="/account"><button type="button">Fiókkezelő</button></a>
-        <a href="/login"><button class="secondary" type="button">Belépés</button></a>
+        <a href="/app"><button type="button">Beszélgetések</button></a>
+        <a href="/account"><button class="secondary" type="button">Fiókkezelő</button></a>
       </div>
+      <a href="/login"><button class="ghost" type="button">Belépés</button></a>
     </div>
   `,
   );
@@ -365,6 +366,9 @@ export function accountPage(opts: {
     ${error ? `<p class="error">${error}</p>` : ""}
     <div class="panel">
       <p><strong>${escape(user.name)}</strong><br/><span class="hint">${escape(user.email)}</span></p>
+      <div class="row">
+        <a href="/app"><button type="button">Beszélgetések</button></a>
+      </div>
       <form method="POST" action="/account/vision">
         <label class="switch">
           <input type="checkbox" name="visionAssist" value="1" ${user.vision_assist ? "checked" : ""} onchange="this.form.submit()" />
@@ -540,7 +544,25 @@ export function inviteAcceptPage(
   token: string,
   loggedIn: boolean,
   error = "",
+  opts: { needsLeaveConfirmation?: boolean; currentFamilyName?: string } = {},
 ): string {
+  const leaveBlock = opts.needsLeaveConfirmation
+    ? `
+      <p class="hint">Jelenleg a(z) <strong>${escape(opts.currentFamilyName || "másik")}</strong> család tagja vagy.
+      A csatlakozáshoz ki kell lépned — ez visszavonhatatlan.</p>
+      <form method="POST" action="/invite/${escape(token)}/accept">
+        <label class="switch">
+          <input type="checkbox" name="confirmLeave" value="1" required />
+          Kilépek a jelenlegi családból, és csatlakozom
+        </label>
+        <button type="submit">Kilépek és csatlakozom</button>
+      </form>`
+    : loggedIn
+      ? error
+        ? `<p class="hint">Csatlakozás most nem lehetséges.</p><a href="/account"><button type="button">Fiók</button></a>`
+        : `<form method="POST" action="/invite/${escape(token)}/accept"><button type="submit">Csatlakozom</button></form>`
+      : `<p class="hint">Küldjük a belépési kódot…</p>`;
+
   return layout(
     "Meghívó",
     `
@@ -548,13 +570,7 @@ export function inviteAcceptPage(
     <p class="sub">Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.</p>
     ${error ? `<p class="error">${escape(error)}</p>` : ""}
     <div class="panel">
-      ${
-        loggedIn
-          ? error
-            ? `<p class="hint">Csatlakozás most nem lehetséges.</p><a href="/account"><button type="button">Fiók</button></a>`
-            : `<form method="POST" action="/invite/${escape(token)}/accept"><button type="submit">Csatlakozom</button></form>`
-          : `<p class="hint">Küldjük a belépési kódot…</p>`
-      }
+      ${leaveBlock}
     </div>
   `,
   );

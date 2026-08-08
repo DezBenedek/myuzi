@@ -11,7 +11,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hangüzenetekhez és hívásokhoz kell a mikrofon.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Videóhíváshoz kell a kamera.</string>
+	<string>Videóhíváshoz és QR kód beolvasásához kell a kamera.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hívásokhoz helyi hálózati kapcsolat kell.</string>
 	<key>UIBackgroundModes</key>

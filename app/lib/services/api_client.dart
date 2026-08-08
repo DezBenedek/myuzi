@@ -14,11 +14,17 @@ class ApiException implements Exception {
     this.statusCode,
     this.softPaywall = false,
     this.needsName = false,
+    this.needsLeaveConfirmation = false,
+    this.currentFamilyName,
+    this.targetFamilyName,
   });
   final String message;
   final int? statusCode;
   final bool softPaywall;
   final bool needsName;
+  final bool needsLeaveConfirmation;
+  final String? currentFamilyName;
+  final String? targetFamilyName;
 
   @override
   String toString() => message;
@@ -93,6 +99,9 @@ class ApiClient {
         statusCode: res.statusCode,
         softPaywall: body['softPaywall'] == true,
         needsName: body['needsName'] == true,
+        needsLeaveConfirmation: body['needsLeaveConfirmation'] == true,
+        currentFamilyName: body['currentFamilyName'] as String?,
+        targetFamilyName: body['targetFamilyName'] as String?,
       );
     }
     return body;
@@ -293,6 +302,58 @@ class ApiClient {
     return (body['invite'] as Map)['url'] as String;
   }
 
+  Future<({String url, String userId, String name})> myQr() async {
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/users/me/qr',
+    );
+    final body = await _json(res);
+    return (
+      url: body['url'] as String,
+      userId: body['userId'] as String,
+      name: body['name'] as String? ?? '',
+    );
+  }
+
+  Future<Map<String, dynamic>> userCard(String userId) async {
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/users/$userId/card',
+    );
+    return _json(res);
+  }
+
+  Future<({String message, bool targetHasFamily, String? targetFamilyName, String targetName})>
+      inviteUserById(String userId) async {
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'userId': userId}),
+      ),
+      path: '/api/invites/user',
+    );
+    final body = await _json(res);
+    final invite = body['invite'] as Map<String, dynamic>? ?? {};
+    return (
+      message: body['message'] as String? ?? 'Meghívó elküldve',
+      targetHasFamily: invite['targetHasFamily'] == true,
+      targetFamilyName: invite['targetFamilyName'] as String?,
+      targetName: invite['targetName'] as String? ?? '',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> inviteInbox() async {
+    final res = await _send(
+      (uri) => _client.get(uri, headers: _headers()),
+      path: '/api/invites/inbox',
+    );
+    final body = await _json(res);
+    return ((body['invites'] as List?) ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> getInvite(String token) async {
     final res = await _send(
       (uri) => _client.get(uri, headers: _headers()),
@@ -301,9 +362,13 @@ class ApiClient {
     return _json(res);
   }
 
-  Future<Family> acceptInvite(String token) async {
+  Future<Family> acceptInvite(String token, {bool confirmLeave = false}) async {
     final res = await _send(
-      (uri) => _client.post(uri, headers: _headers()),
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({'confirmLeave': confirmLeave}),
+      ),
       path: '/api/invites/$token/accept',
     );
     final body = await _json(res);

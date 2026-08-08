@@ -5,6 +5,7 @@ import {
   canAddMember,
   getFamily,
   getUserFamily,
+  leaveCurrentFamily,
   memberCount,
   publicFamily,
   publicUser,
@@ -14,6 +15,12 @@ import { requireAuth } from "../middleware/auth";
 const families = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 families.use("*", requireAuth);
+
+families.post("/leave", async (c) => {
+  const result = await leaveCurrentFamily(c.env.DB, c.get("userId"));
+  if (!result.ok) return c.json({ error: result.error }, 400);
+  return c.json({ ok: true });
+});
 
 families.get("/mine", async (c) => {
   const family = await getUserFamily(c.env.DB, c.get("userId"));

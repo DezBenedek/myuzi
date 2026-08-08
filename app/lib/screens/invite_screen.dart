@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../providers/providers.dart';
 import '../services/api_client.dart';
+import '../services/toast.dart';
 import '../widgets/widgets.dart';
 
 class InviteScreen extends ConsumerStatefulWidget {
@@ -20,6 +21,8 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
   String? _error;
   bool _loading = true;
   bool _busy = false;
+  bool _needsLeave = false;
+  String? _currentFamilyName;
 
   @override
   void initState() {
@@ -43,22 +46,89 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
     }
   }
 
-  Future<void> _accept() async {
+  Future<void> _accept({bool confirmLeave = false}) async {
     final auth = ref.read(authProvider);
     if (!auth.isLoggedIn) {
       context.go('/login');
       return;
     }
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      await ref.read(apiProvider).acceptInvite(widget.token);
+      await ref.read(apiProvider).acceptInvite(
+            widget.token,
+            confirmLeave: confirmLeave,
+          );
       ref.invalidate(familyProvider);
-      if (mounted) context.go('/');
+      if (mounted) {
+        showAppToast(context, 'Csatlakoztál a családhoz');
+        context.go('/');
+      }
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      if (e.needsLeaveConfirmation) {
+        setState(() {
+          _needsLeave = true;
+          _currentFamilyName = e.currentFamilyName;
+          _error = e.message;
+          _busy = false;
+        });
+        return;
+      }
+      setState(() {
+        _error = e.message;
+        _busy = false;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Csatlakozás sikertelen';
+        _busy = false;
+      });
     }
+  }
+
+  Future<void> _confirmLeaveAndJoin() async {
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Kilépés a jelenlegi családból?', style: t.textTheme.titleLarge),
+                const SizedBox(height: 10),
+                Text(
+                  'A(z) ${_currentFamilyName ?? "jelenlegi"} családból kilépsz, '
+                  'és csatlakozol a(z) ${_familyName ?? "új"} családhoz. '
+                  'Ez nem vonható vissza könnyen.',
+                  style: t.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: 'Kilépek és csatlakozom',
+                  icon: Icons.logout,
+                  danger: true,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (ok == true) await _accept(confirmLeave: true);
   }
 
   @override
@@ -81,12 +151,23 @@ class _InviteScreenState extends ConsumerState<InviteScreen> {
                           : 'Meghívót kaptál a(z) $_familyName családba.',
                       style: t.textTheme.bodyLarge,
                     ),
+                    if (_error != null && _familyName != null) ...[
+                      const SizedBox(height: 12),
+                      Text(_error!, style: TextStyle(color: t.colorScheme.error)),
+                    ],
                     const Spacer(),
                     if (_familyName != null)
                       BigButton(
-                        label: _busy ? 'Csatlakozás…' : 'Csatlakozom',
-                        icon: Icons.group_add,
-                        onPressed: _busy ? null : _accept,
+                        label: _busy
+                            ? 'Csatlakozás…'
+                            : _needsLeave
+                                ? 'Kilépek és csatlakozom'
+                                : 'Csatlakozom',
+                        icon: _needsLeave ? Icons.logout : Icons.group_add,
+                        danger: _needsLeave,
+                        onPressed: _busy
+                            ? null
+                            : (_needsLeave ? _confirmLeaveAndJoin : () => _accept()),
                       ),
                     const SizedBox(height: 10),
                     BigButton(
