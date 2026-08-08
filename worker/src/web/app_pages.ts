@@ -16,64 +16,182 @@ function safeId(id: string): string {
 }
 
 const appCss = `
-.nav { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 18px; }
-.nav a { text-decoration:none; }
-.chat-list { list-style:none; padding:0; margin:0; }
+body.bare { background: var(--bg); }
+.app-frame {
+  min-height: 100dvh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(900px 420px at 0% 0%, #d9f2e6 0%, transparent 55%),
+    var(--bg);
+}
+.app-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(12px + var(--safe-top)) 16px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(238, 244, 240, 0.92);
+  backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.app-top .logo {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.25rem;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  text-decoration: none;
+}
+.app-top-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+.app-top-nav a { text-decoration: none; }
+.app-top-nav button {
+  margin: 0; width: auto; padding: 10px 14px; min-height: 44px;
+}
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  margin: 0 auto;
+  padding: 18px 16px calc(20px + var(--safe-bottom));
+  min-height: 0;
+}
+.app-main.fill {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
+.app-title {
+  font-family: var(--display);
+  font-size: clamp(1.7rem, 4vw, 2.2rem);
+  letter-spacing: -0.03em;
+  margin: 0 0 6px;
+}
+.app-sub { color: var(--muted); margin: 0 0 18px; }
+.chat-list { list-style: none; padding: 0; margin: 0; }
 .chat-list li a {
-  display:flex; justify-content:space-between; gap:12px; align-items:center;
-  padding:14px 0; border-bottom:1px solid var(--line); color:inherit; text-decoration:none;
+  display: flex; justify-content: space-between; gap: 12px; align-items: center;
+  padding: 16px 4px; border-bottom: 1px solid var(--line); color: inherit; text-decoration: none;
 }
-.chat-list .meta { color:var(--muted); font-size:0.9rem; text-align:right; }
+.chat-list li a:hover { background: rgba(11, 110, 79, 0.04); }
+.chat-list .meta { color: var(--muted); font-size: 0.9rem; text-align: right; }
 .badge {
-  display:inline-block; min-width:22px; padding:2px 8px; border-radius:999px;
-  background:var(--brand); color:#fff; font-weight:800; font-size:0.8rem; text-align:center;
+  display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 999px;
+  background: var(--brand); color: #fff; font-weight: 800; font-size: 0.8rem; text-align: center;
 }
-.msgs { display:flex; flex-direction:column; gap:12px; min-height:40vh; margin:12px 0 18px; }
+.chat-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.chat-toolbar {
+  display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 14px;
+  border-bottom: 1px solid var(--line); background: #f7fbf8;
+}
+.chat-toolbar button { margin: 0; width: auto; flex: 1; min-width: 120px; }
+.msgs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 14px;
+  overflow-y: auto;
+  min-height: 42vh;
+}
 .bubble {
-  max-width:85%; padding:12px 14px; border-radius:16px; background:#e8f3ee;
-  border:1px solid var(--line);
+  max-width: 85%; padding: 12px 14px; border-radius: 16px; background: #e8f3ee;
+  border: 1px solid var(--line);
 }
-.bubble.mine { align-self:flex-end; background:#d9f2e6; }
-.bubble.unread { background:#fff6c8; border-color:#e6d56a; }
-.bubble .who { font-weight:700; margin-bottom:4px; }
-.bubble .time { color:var(--muted); font-size:0.85rem; margin-top:6px; }
-.composer { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.composer button { margin-top:0; width:auto; min-width:120px; }
-#recHint { color:var(--muted); font-weight:650; }
+.bubble.mine { align-self: flex-end; background: #d9f2e6; }
+.bubble.unread { background: #fff6c8; border-color: #e6d56a; }
+.bubble .who { font-weight: 700; margin-bottom: 4px; }
+.bubble .time { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+.composer {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 12px 14px calc(12px + var(--safe-bottom));
+  border-top: 1px solid var(--line);
+  background: #f7fbf8;
+}
+.composer button { margin: 0; width: auto; min-width: 140px; }
+#recHint { color: var(--muted); font-weight: 650; }
+.call-frame {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #0b1a14;
+  color: #e8f4ee;
+}
+.call-head {
+  padding: calc(14px + var(--safe-top)) 16px 10px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.call-head h1 {
+  font-family: var(--display);
+  font-size: 1.35rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+.call-head .hint { color: rgba(232, 244, 238, 0.65); margin: 0; }
 .video-grid {
-  display:grid; gap:10px; min-height:58vh;
-  background:#0b1a14; border-radius:16px; padding:10px; margin:12px 0;
-  grid-template-columns:repeat(2, minmax(0, 1fr));
+  flex: 1;
+  display: grid; gap: 10px;
+  min-height: 0;
+  padding: 10px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.video-grid.count-1 { grid-template-columns:1fr; }
+.video-grid.count-1 { grid-template-columns: 1fr; }
 .video-grid.count-2 {
-  grid-template-columns:1fr;
-  grid-template-rows:1fr auto;
-  min-height:62vh;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr auto;
 }
-.video-grid.count-2 .lk-tile.remote {
-  min-height:48vh;
-}
+.video-grid.count-2 .lk-tile.remote { min-height: 0; }
 .video-grid.count-2 .lk-tile.local {
-  width:min(180px, 42vw); min-height:120px; justify-self:end;
+  width: min(180px, 42vw); min-height: 120px; justify-self: end;
 }
-.video-grid.count-3, .video-grid.count-4 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
-.video-grid.count-5, .video-grid.count-6 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+.video-grid.count-3, .video-grid.count-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.video-grid.count-5, .video-grid.count-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .video-grid video, .video-grid .lk-tile {
-  width:100%; min-height:220px; background:#12261c; border-radius:12px; object-fit:cover;
+  width: 100%; min-height: 180px; background: #12261c; border-radius: 12px; object-fit: cover;
 }
-.video-grid .lk-media { width:100%; height:100%; min-height:inherit; }
+.video-grid .lk-media { width: 100%; height: 100%; min-height: inherit; }
 .video-grid .lk-media video, .video-grid .lk-media audio {
-  width:100%; height:100%; min-height:inherit; object-fit:cover; display:block;
+  width: 100%; height: 100%; min-height: inherit; object-fit: cover; display: block;
 }
-.video-grid .lk-tile { position:relative; overflow:hidden; border:1px solid transparent; }
-.video-grid .lk-tile.active { border-color:#3ddc97; box-shadow:0 0 0 2px #3ddc9744; }
+.video-grid .lk-tile { position: relative; overflow: hidden; border: 1px solid transparent; }
+.video-grid .lk-tile.active { border-color: #3ddc97; }
 .video-grid .lk-tile .lk-name {
-  position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px;
-  background:#0009; color:#fff; font-size:.85rem; z-index:2;
+  position: absolute; left: 8px; bottom: 8px; padding: 4px 8px; border-radius: 8px;
+  background: #0009; color: #fff; font-size: .85rem; z-index: 2;
 }
-.call-controls { display:flex; gap:10px; flex-wrap:wrap; }
-.call-controls button { width:auto; flex:1; min-width:110px; margin-top:0; }
+.call-controls {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px calc(16px + var(--safe-bottom));
+  background: rgba(0,0,0,0.28);
+}
+.call-controls button { width: auto; flex: 1; min-width: 110px; margin: 0; }
+.inbox-panel {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 16px 16px;
+  min-height: 50vh;
+}
+.qr-stage {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 28px 16px; text-align: center;
+}
 `;
 
 /** Shared client helpers — escape API strings before any HTML use. */
@@ -138,19 +256,34 @@ function connectRealtime(onEvent) {
 }
 `;
 
-function appShell(title: string, user: UserRow, body: string): string {
+function appShell(
+  title: string,
+  user: UserRow,
+  body: string,
+  opts?: { fill?: boolean; hideNav?: boolean },
+): string {
+  const fill = !!opts?.fill;
+  const hideNav = !!opts?.hideNav;
   return layout(
     title,
     `
     <style>${appCss}</style>
-    <div class="nav">
-      <a href="/app"><button class="secondary" type="button" style="margin:0;width:auto;padding:10px 14px">Beszélgetések</button></a>
-      <a href="/account"><button class="ghost" type="button" style="margin:0;width:auto;padding:10px 14px">Fiók</button></a>
+    <div class="app-frame">
+      ${
+        hideNav
+          ? ""
+          : `<header class="app-top">
+        <a class="logo" href="/">MyÜzi</a>
+        <nav class="app-top-nav">
+          <a href="/app"><button class="secondary" type="button">Beszélgetések</button></a>
+          <a href="/account"><button class="ghost" type="button">Fiók</button></a>
+        </nav>
+      </header>`
+      }
+      <main class="app-main${fill ? " fill" : ""}">${body}</main>
     </div>
-    <p class="hint" style="margin-top:0">Bejelentkezve: ${escape(user.name)}</p>
-    ${body}
   `,
-    !!user.vision_assist,
+    { vision: !!user.vision_assist, variant: "bare" },
   );
 }
 
@@ -159,9 +292,9 @@ export function appInboxPage(user: UserRow): string {
     "Beszélgetések",
     user,
     `
-    <h1 class="brand" style="font-size:2rem">Beszélgetések</h1>
-    <p class="sub">Hangüzenetek és hívások a böngészőben.</p>
-    <div class="panel">
+    <h1 class="app-title">Beszélgetések</h1>
+    <p class="app-sub">Hangüzenetek és hívások · ${escape(user.name)}</p>
+    <div class="inbox-panel">
       <div id="status" class="hint">Betöltés…</div>
       <ul class="chat-list" id="list"></ul>
     </div>
@@ -240,20 +373,20 @@ export function appInboxPage(user: UserRow): string {
 export function appChatPage(user: UserRow, conversationId: string, title: string): string {
   const id = safeId(conversationId);
   if (!id) {
-    return appShell("Hiba", user, `<div class="panel"><p class="error">Érvénytelen beszélgetés.</p></div>`);
+    return appShell("Hiba", user, `<div class="inbox-panel"><p class="error">Érvénytelen beszélgetés.</p></div>`);
   }
   const safeTitle = escape(title || "Beszélgetés");
   return appShell(
     title || "Beszélgetés",
     user,
     `
-    <h1 class="brand" style="font-size:1.7rem" id="chatTitle">${safeTitle}</h1>
-    <div class="row" style="margin-bottom:10px">
-      <button type="button" id="btnAudio" class="secondary">Hanghívás</button>
-      <button type="button" id="btnVideo">Videóhívás</button>
-    </div>
-    <div class="panel">
-      <div id="status" class="hint">Betöltés…</div>
+    <h1 class="app-title" id="chatTitle">${safeTitle}</h1>
+    <div class="chat-stage">
+      <div class="chat-toolbar">
+        <button type="button" id="btnAudio" class="secondary">Hanghívás</button>
+        <button type="button" id="btnVideo">Videóhívás</button>
+      </div>
+      <div id="status" class="hint" style="padding:10px 14px 0">Betöltés…</div>
       <div class="msgs" id="msgs"></div>
       <div class="composer">
         <button type="button" id="recBtn">Felvétel</button>
@@ -522,20 +655,24 @@ export function appCallPage(
 ): string {
   const callId = safeId(opts.callId);
   if (!callId) {
-    return appShell("Hiba", user, `<div class="panel"><p class="error">Érvénytelen hívás.</p></div>`);
+    return appShell("Hiba", user, `<div class="inbox-panel"><p class="error">Érvénytelen hívás.</p></div>`);
   }
   return appShell(
     opts.title || "Hívás",
     user,
     `
-    <h1 class="brand" style="font-size:1.6rem">${escape(opts.title || "Hívás")}</h1>
-    <p class="hint">${opts.callType === "video" ? "Videóhívás" : "Hanghívás"}</p>
-    <div id="status" class="hint">Csatlakozás…</div>
-    <div class="video-grid count-1" id="grid"></div>
-    <div class="call-controls">
-      <button type="button" id="micBtn" class="secondary">Mikrofon</button>
-      <button type="button" id="camBtn" class="secondary" ${opts.callType === "video" ? "" : "disabled"}>Kamera</button>
-      <button type="button" id="endBtn" style="background:var(--danger)">Befejezés</button>
+    <div class="call-frame">
+      <div class="call-head">
+        <h1>${escape(opts.title || "Hívás")}</h1>
+        <p class="hint">${opts.callType === "video" ? "Videóhívás" : "Hanghívás"}</p>
+        <div id="status" class="hint">Csatlakozás…</div>
+      </div>
+      <div class="video-grid count-1" id="grid"></div>
+      <div class="call-controls">
+        <button type="button" id="micBtn" class="secondary">Mikrofon</button>
+        <button type="button" id="camBtn" class="secondary" ${opts.callType === "video" ? "" : "disabled"}>Kamera</button>
+        <button type="button" id="endBtn" class="danger">Befejezés</button>
+      </div>
     </div>
     <script>
     ${clientHelpers}
@@ -834,6 +971,7 @@ export function appCallPage(
     document.getElementById('endBtn').onclick = () => leaveOrEnd();
     </script>
   `,
+    { fill: true, hideNav: true },
   );
 }
 
@@ -846,20 +984,37 @@ export function userQrPage(opts: {
   return layout(
     "QR kapcsolat",
     `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">QR kód / felhasználói link</p>
-    <div class="panel">
-      <p class="hint">Azonosító: <code>${escape(id)}</code></p>
-      ${
-        opts.loggedIn
-          ? opts.meId === opts.userId
-            ? `<p class="ok">Ez a te QR kódod. Mutasd meg családtagodnak az appban.</p>
-               <a href="/app"><button type="button">Beszélgetések</button></a>`
-            : `<p>Nyisd meg a MyÜzi appot, és olvasd be ezt a QR-t a + menüből.</p>
-               <a href="/app"><button type="button">Tovább a beszélgetésekhez</button></a>`
-          : `<a href="/login"><button type="button">Belépés</button></a>`
-      }
+    <div class="page">
+      <header class="page-top">
+        <a class="logo" href="/">MyÜzi</a>
+        <nav class="page-nav">
+          ${
+            opts.loggedIn
+              ? `<a href="/app"><button class="secondary" type="button">Beszélgetések</button></a>`
+              : `<a href="/login"><button type="button">Belépés</button></a>`
+          }
+        </nav>
+      </header>
+      <main class="page-body">
+        <div class="qr-stage">
+          <h1 class="brand-mark">Kapcsolat</h1>
+          <p class="sub">QR kód / felhasználói link</p>
+          <div class="panel" style="width:min(420px,100%)">
+            <p class="hint">Azonosító: <code>${escape(id)}</code></p>
+            ${
+              opts.loggedIn
+                ? opts.meId === opts.userId
+                  ? `<p class="ok">Ez a te QR kódod. Mutasd meg családtagodnak az appban.</p>
+                     <a href="/app"><button type="button">Beszélgetések</button></a>`
+                  : `<p>Nyisd meg a MyÜzi appot, és olvasd be ezt a QR-t a + menüből.</p>
+                     <a href="/app"><button type="button">Tovább a beszélgetésekhez</button></a>`
+                : `<a href="/login"><button type="button">Belépés</button></a>`
+            }
+          </div>
+        </div>
+      </main>
     </div>
   `,
+    { variant: "page" },
   );
 }

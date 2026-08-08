@@ -187,7 +187,15 @@ function setSessionCookie(c: { header: (k: string, v: string) => void }, token: 
   );
 }
 
-web.get("/", (c) => c.html(landingPage()));
+web.get("/", optionalAuth, (c) => {
+  const user = c.get("user");
+  return c.html(
+    landingPage({
+      loggedIn: !!user,
+      userName: user?.name,
+    }),
+  );
+});
 
 web.get("/app", optionalAuth, async (c) => {
   const user = c.get("user");

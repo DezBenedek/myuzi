@@ -2,69 +2,76 @@ import type { UserRow } from "../types";
 
 const css = `
 :root {
-  --bg: #f3f7f4;
+  --bg: #eef4f0;
+  --bg-deep: #0d1c16;
   --ink: #12261c;
   --muted: #4d6358;
   --brand: #0b6e4f;
   --brand-2: #14966c;
+  --brand-soft: #d5efe4;
   --card: #ffffff;
-  --line: #d7e4dc;
+  --line: #cfe0d6;
   --danger: #b42318;
-  --radius: 18px;
-  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --ok: #0b6e4f;
+  --radius: 16px;
+  --font: "Manrope", sans-serif;
+  --display: "Bricolage Grotesque", "Manrope", sans-serif;
+  --shadow-soft: 0 18px 40px rgba(18, 38, 28, 0.08);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0;
+  min-height: 100dvh;
   font-family: var(--font);
   color: var(--ink);
-  background:
-    radial-gradient(1200px 500px at 10% -10%, #d9f2e6 0%, transparent 60%),
-    radial-gradient(900px 400px at 100% 0%, #e8f4ff 0%, transparent 55%),
-    var(--bg);
-  min-height: 100vh;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 a { color: var(--brand); }
-.wrap { max-width: 720px; margin: 0 auto; padding: 28px 18px 64px; }
-.brand {
-  font-size: clamp(2rem, 6vw, 3rem);
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  margin: 0;
+button, input, select, textarea { font: inherit; }
+button {
+  border: none;
+  border-radius: 14px;
+  padding: 14px 18px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
 }
-.sub { color: var(--muted); font-size: 1.05rem; margin: 8px 0 28px; }
-.panel {
-  background: var(--card);
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button.secondary { background: var(--brand-soft); color: var(--brand); }
+button.ghost {
+  background: transparent;
+  color: var(--brand);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 22px;
-  margin-bottom: 18px;
 }
+button.danger { background: var(--danger); color: #fff; }
 label { display: block; font-weight: 650; margin: 14px 0 6px; }
-input, button, select {
-  font: inherit;
+input, select, textarea {
   width: 100%;
   border-radius: 14px;
   padding: 14px 16px;
   border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
 }
-input { background: #fff; }
-button {
-  background: var(--brand);
-  color: #fff;
-  border: none;
-  font-weight: 700;
-  cursor: pointer;
-  margin-top: 14px;
-}
-button.secondary { background: #e8f3ee; color: var(--brand); }
-button.ghost { background: transparent; color: var(--brand); border: 1px solid var(--line); }
-.row { display: flex; gap: 10px; flex-wrap: wrap; }
-.row > * { flex: 1; min-width: 140px; }
 .hint { color: var(--muted); font-size: 0.95rem; }
 .error { color: var(--danger); margin-top: 10px; }
-.ok { color: var(--brand); margin-top: 10px; }
-.big { font-size: 1.25rem; }
+.ok { color: var(--ok); margin-top: 10px; }
+.pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row > * { flex: 1; min-width: 140px; }
 .switch {
   display: flex; align-items: center; gap: 12px;
   margin-top: 16px; font-weight: 650;
@@ -73,103 +80,440 @@ button.ghost { background: transparent; color: var(--brand); border: 1px solid v
 .list { list-style: none; padding: 0; margin: 0; }
 .list li {
   display: flex; justify-content: space-between; gap: 12px;
-  padding: 12px 0; border-bottom: 1px solid var(--line);
+  padding: 14px 0; border-bottom: 1px solid var(--line);
 }
-.pill {
-  display: inline-block; padding: 4px 10px; border-radius: 999px;
-  background: #e8f3ee; color: var(--brand); font-size: 0.85rem; font-weight: 700;
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 16px;
 }
-.compare { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 0.95rem; }
-.compare th, .compare td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
-.compare th { color: var(--muted); font-weight: 700; }
-.compare .yes { color: var(--brand); font-weight: 700; }
-.compare .no { color: var(--muted); }
-.plan-pick { display: grid; gap: 10px; margin: 12px 0; }
-.plan-pick label {
-  display: flex; gap: 12px; align-items: flex-start;
-  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0; font-weight: 600;
+.brand-mark {
+  font-family: var(--display);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  margin: 0;
+  line-height: 0.95;
+}
+.sub { color: var(--muted); font-size: 1.05rem; margin: 8px 0 24px; }
+
+/* ——— Page chrome (account / forms) ——— */
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.page-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: calc(16px + var(--safe-top)) 22px 12px;
+  border-bottom: 1px solid transparent;
+}
+.page-top a.logo {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.35rem;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  text-decoration: none;
+}
+.page-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+.page-nav a { text-decoration: none; }
+.page-nav button { margin: 0; width: auto; padding: 10px 14px; min-height: 44px; }
+.page-body {
+  flex: 1;
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 28px 18px calc(40px + var(--safe-bottom));
+}
+.page-body h1.brand-mark { font-size: clamp(2.2rem, 6vw, 3rem); }
+.page-foot {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0 18px calc(20px + var(--safe-bottom));
+}
+
+/* ——— Auth: full-viewport ——— */
+.auth-screen {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  background: var(--bg-deep);
+}
+.auth-visual {
+  position: relative;
+  overflow: hidden;
+  min-height: 42vh;
+  background:
+    radial-gradient(800px 500px at 20% 20%, rgba(20, 150, 108, 0.35), transparent 60%),
+    radial-gradient(700px 420px at 90% 80%, rgba(90, 160, 120, 0.18), transparent 55%),
+    linear-gradient(160deg, #0d1c16 0%, #143528 48%, #0a1612 100%);
+  color: #e8f4ee;
+  padding: calc(36px + var(--safe-top)) 40px 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.auth-visual .brand-mark { font-size: clamp(2.8rem, 6vw, 4.4rem); color: #fff; }
+.auth-visual p {
+  max-width: 22rem;
+  color: rgba(232, 244, 238, 0.72);
+  font-size: 1.05rem;
+  line-height: 1.45;
+  margin: 18px 0 0;
+}
+.auth-wave {
+  width: min(420px, 100%);
+  height: auto;
+  opacity: 0.92;
+  margin-top: auto;
+}
+.auth-panel {
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 36px 28px calc(36px + var(--safe-bottom));
+}
+.auth-panel-inner { width: min(420px, 100%); margin: 0 auto; }
+.auth-panel h1 {
+  font-family: var(--display);
+  font-size: clamp(1.8rem, 4vw, 2.3rem);
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+}
+.auth-panel .sub { margin-bottom: 22px; }
+.auth-panel form button { width: 100%; margin-top: 16px; min-height: 52px; }
+.auth-back {
+  display: inline-block;
+  margin-bottom: 22px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.auth-back:hover { color: var(--brand); }
+
+/* ——— Landing ——— */
+.landing { background: var(--bg-deep); color: #eef6f1; }
+.landing-hero {
+  min-height: 100dvh;
+  min-height: 100svh;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  align-items: center;
+  padding: calc(28px + var(--safe-top)) 28px calc(36px + var(--safe-bottom));
+  background:
+    radial-gradient(1100px 700px at 75% 15%, rgba(31, 170, 114, 0.28), transparent 58%),
+    radial-gradient(900px 600px at 10% 90%, rgba(120, 180, 140, 0.14), transparent 50%),
+    linear-gradient(165deg, #0a1511 0%, #123226 42%, #0c1a14 100%);
+}
+.landing-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(8, 18, 14, 0.72) 0%, rgba(8, 18, 14, 0.35) 42%, transparent 70%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000' viewBox='0 0 1600 1000' fill='none'%3E%3Cpath d='M80 620c120-180 240-180 360 0s240 180 360 0 240-180 360 0 240 180 360 0' stroke='%233dcf9a' stroke-opacity='.28' stroke-width='18' stroke-linecap='round'/%3E%3Cpath d='M80 700c120-140 240-140 360 0s240 140 360 0 240-140 360 0 240 140 360 0' stroke='%23a8e6c8' stroke-opacity='.16' stroke-width='12' stroke-linecap='round'/%3E%3Ccircle cx='1180' cy='320' r='210' fill='%231faa72' fill-opacity='.14'/%3E%3Ccircle cx='1260' cy='280' r='92' fill='%23e8f4ee' fill-opacity='.09'/%3E%3Crect x='980' y='420' width='280' height='480' rx='48' fill='%23e8f4ee' fill-opacity='.09' stroke='%23a8e6c8' stroke-opacity='.32' stroke-width='3'/%3E%3Crect x='1018' y='470' width='204' height='300' rx='22' fill='%230d1c16' fill-opacity='.55'/%3E%3Cpath d='M1060 620h120M1060 660h88M1060 700h104' stroke='%233dcf9a' stroke-opacity='.65' stroke-width='10' stroke-linecap='round'/%3E%3C/svg%3E")
+      right 4% center / min(62vw, 760px) auto no-repeat;
+  pointer-events: none;
+}
+.landing-hero-copy {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  animation: rise 0.85s ease-out;
+}
+.landing-hero .brand-mark {
+  font-size: clamp(3.6rem, 12vw, 6.6rem);
+  color: #fff;
+  margin-bottom: 18px;
+}
+.landing-hero h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(1.45rem, 3.4vw, 2.15rem);
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin: 0 0 14px;
+  color: #f4faf7;
+  max-width: 14ch;
+}
+.landing-hero .lead {
+  margin: 0 0 28px;
+  color: rgba(232, 244, 238, 0.78);
+  font-size: clamp(1rem, 2.2vw, 1.15rem);
+  line-height: 1.45;
+  max-width: 28ch;
+}
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.cta-row a { text-decoration: none; }
+.cta-row .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 14px 22px;
+  border-radius: 14px;
+  font-weight: 700;
+  border: none;
   cursor: pointer;
 }
-.plan-pick input { width: auto; margin-top: 4px; }
+.cta-row .btn-primary { background: #1faa72; color: #062417; }
+.cta-row .btn-ghost {
+  background: transparent;
+  color: #e8f4ee;
+  border: 1px solid rgba(232, 244, 238, 0.28);
+}
+.landing-section {
+  padding: clamp(56px, 10vh, 96px) 28px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.landing-section .inner { width: min(920px, 100%); margin: 0 auto; }
+.landing-section h3 {
+  font-family: var(--display);
+  font-size: clamp(1.7rem, 4vw, 2.4rem);
+  letter-spacing: -0.03em;
+  margin: 0 0 12px;
+  max-width: 16ch;
+}
+.landing-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.08rem;
+  line-height: 1.5;
+  max-width: 36ch;
+}
+.landing-section + .landing-section { border-top: 1px solid var(--line); }
+.landing-section.alt {
+  background:
+    linear-gradient(180deg, #e7f2eb 0%, #eef4f0 100%);
+}
+.landing-foot {
+  background: var(--bg-deep);
+  color: rgba(232, 244, 238, 0.55);
+  padding: 28px;
+  text-align: center;
+  font-size: 0.9rem;
+}
+.landing-foot a { color: #9fd9be; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes softPulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
+}
+.landing-hero::after {
+  content: "";
+  position: absolute;
+  right: 12%;
+  top: 22%;
+  width: min(28vw, 220px);
+  height: min(28vw, 220px);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(61, 207, 154, 0.35), transparent 70%);
+  animation: softPulse 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .plan-card {
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 18px 16px;
   background: #fafdfb;
 }
-.plan-card h3 { margin: 0 0 4px; font-size: 1.35rem; }
+.plan-card h3 { margin: 0 0 4px; font-size: 1.35rem; font-family: var(--display); }
 .plan-card .price { font-size: 1.1rem; font-weight: 700; color: var(--brand); margin: 0 0 12px; }
 .plan-card ul { margin: 0 0 14px; padding-left: 1.1rem; color: var(--muted); }
 .plan-card li { margin: 6px 0; }
 .plan-current { margin: 0 0 4px; font-size: 1.2rem; font-weight: 750; }
-.footer { margin-top: 28px; color: var(--muted); font-size: 0.9rem; }
+.qr-stage {
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 28px 16px; text-align: center;
+}
+
+@media (max-width: 860px) {
+  .auth-screen { grid-template-columns: 1fr; }
+  .auth-visual { min-height: 34vh; padding: calc(28px + var(--safe-top)) 24px 28px; }
+  .auth-wave { width: min(280px, 70%); }
+  .landing-hero {
+    align-items: end;
+    padding: calc(24px + var(--safe-top)) 22px calc(32px + var(--safe-bottom));
+  }
+  .landing-hero::before {
+    background:
+      linear-gradient(180deg, rgba(8, 18, 14, 0.15) 0%, rgba(8, 18, 14, 0.55) 48%, rgba(8, 18, 14, 0.92) 100%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000' viewBox='0 0 1600 1000' fill='none'%3E%3Cpath d='M80 520c120-180 240-180 360 0s240 180 360 0 240-180 360 0 240 180 360 0' stroke='%233dcf9a' stroke-opacity='.3' stroke-width='18' stroke-linecap='round'/%3E%3Cpath d='M80 600c120-140 240-140 360 0s240 140 360 0 240-140 360 0 240 140 360 0' stroke='%23a8e6c8' stroke-opacity='.18' stroke-width='12' stroke-linecap='round'/%3E%3Crect x='980' y='180' width='280' height='480' rx='48' fill='%23e8f4ee' fill-opacity='.1' stroke='%23a8e6c8' stroke-opacity='.3' stroke-width='3'/%3E%3Crect x='1018' y='230' width='204' height='300' rx='22' fill='%230d1c16' fill-opacity='.5'/%3E%3Cpath d='M1060 380h120M1060 420h88M1060 460h104' stroke='%233dcf9a' stroke-opacity='.65' stroke-width='10' stroke-linecap='round'/%3E%3C/svg%3E")
+        center 16% / min(96vw, 460px) auto no-repeat;
+  }
+  .landing-hero::after { top: 12%; right: 8%; }
+}
 @media (max-width: 520px) {
-  .wrap { padding: 18px 14px 48px; }
-  button, input { min-height: 52px; }
+  .page-body { padding: 22px 14px calc(32px + var(--safe-bottom)); }
+  button, input, select { min-height: 52px; }
+  .cta-row .btn { width: 100%; }
 }
 `;
 
-export function layout(title: string, body: string, vision = false): string {
+const waveSvg = `<svg class="auth-wave" viewBox="0 0 420 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M10 70c40-48 80-48 120 0s80 48 120 0 80-48 120 0 80 48 120 0" stroke="#3dcf9a" stroke-width="10" stroke-linecap="round" opacity=".85"/>
+  <path d="M10 88c40-32 80-32 120 0s80 32 120 0 80-32 120 0 80 32 120 0" stroke="#a8e6c8" stroke-width="6" stroke-linecap="round" opacity=".45"/>
+</svg>`;
+
+type LayoutOpts = {
+  vision?: boolean;
+  variant?: "page" | "auth" | "landing" | "bare";
+  userName?: string | null;
+};
+
+export function layout(title: string, body: string, visionOrOpts: boolean | LayoutOpts = false): string {
+  const opts: LayoutOpts =
+    typeof visionOrOpts === "boolean" ? { vision: visionOrOpts } : visionOrOpts;
+  const vision = !!opts.vision;
+  const variant = opts.variant ?? "page";
   const visionCss = vision
-    ? `body{font-size:1.2rem} .brand{font-size:3.2rem} button,input{min-height:60px;font-size:1.15rem;font-weight:800;border-width:2px}
-       :root{--ink:#000;--bg:#fff;--brand:#004d33;--line:#000}`
+    ? `body{font-size:1.2rem} .brand-mark{font-size:3.2rem!important} button,input,select{min-height:60px;font-size:1.15rem;font-weight:800;border-width:2px}
+       :root{--ink:#000;--bg:#fff;--brand:#004d33;--line:#000;--muted:#222}`
     : "";
   const safeTitle = escape(title);
+  const bodyClass =
+    variant === "landing" ? "landing" : variant === "auth" ? "auth" : variant === "bare" ? "bare" : "site";
+
   return `<!doctype html>
 <html lang="hu">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1c16" />
   <meta name="referrer" content="no-referrer" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; media-src 'self' blob:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https: wss:; media-src 'self' blob:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" />
   <title>${safeTitle} · MyÜzi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>${css}${visionCss}</style>
 </head>
-<body>
-  <div class="wrap">
-    ${body}
-    <p class="footer">MyÜzi · myuzi.uvmr.app</p>
-  </div>
+<body class="${bodyClass}">
+  ${body}
 </body>
 </html>`;
 }
 
-export function landingPage(): string {
+function pageChrome(body: string, opts?: { userName?: string | null }): string {
+  const nav = opts?.userName
+    ? `<nav class="page-nav">
+        <a href="/app"><button class="secondary" type="button">Beszélgetések</button></a>
+        <a href="/account"><button class="ghost" type="button">Fiók</button></a>
+      </nav>`
+    : `<nav class="page-nav">
+        <a href="/login"><button type="button">Belépés</button></a>
+      </nav>`;
+  return `
+  <div class="page">
+    <header class="page-top">
+      <a class="logo" href="/">MyÜzi</a>
+      ${nav}
+    </header>
+    <main class="page-body">${body}</main>
+    <p class="page-foot">MyÜzi · myuzi.uvmr.app</p>
+  </div>`;
+}
+
+function authChrome(title: string, sub: string, formHtml: string): string {
+  return `
+  <div class="auth-screen">
+    <aside class="auth-visual">
+      <div>
+        <p class="brand-mark">MyÜzi</p>
+        <p>Hangüzenetek és hívások a családnak — appban és böngészőben.</p>
+      </div>
+      ${waveSvg}
+    </aside>
+    <section class="auth-panel">
+      <div class="auth-panel-inner">
+        <a class="auth-back" href="/">← Kezdőlap</a>
+        <h1>${escape(title)}</h1>
+        <p class="sub">${sub}</p>
+        ${formHtml}
+      </div>
+    </section>
+  </div>`;
+}
+
+export function landingPage(opts?: { loggedIn?: boolean; userName?: string }): string {
+  const loggedIn = !!opts?.loggedIn;
+  const name = opts?.userName?.trim();
+  const primary = loggedIn
+    ? `<a href="/app"><span class="btn btn-primary">Beszélgetések</span></a>
+       <a href="/account"><span class="btn btn-ghost">Fiók${name ? ` · ${escape(name)}` : ""}</span></a>`
+    : `<a href="/login"><span class="btn btn-primary">Belépés</span></a>
+       <a href="/app"><span class="btn btn-ghost">Webes beszélgetések</span></a>`;
+
   return layout(
     "Kezdőlap",
     `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Családi hangüzenetek és hívások — appban és a weben.</p>
-    <div class="panel">
-      <div class="row">
-        <a href="/app"><button type="button">Beszélgetések</button></a>
-        <a href="/account"><button class="secondary" type="button">Fiókkezelő</button></a>
+    <section class="landing-hero">
+      <div class="landing-hero-copy">
+        <p class="brand-mark">MyÜzi</p>
+        <h2>A család hangja egy helyen.</h2>
+        <p class="lead">Hangüzenetek és élő hívások — telefonon, és a teljes képernyős weben.</p>
+        <div class="cta-row">${primary}</div>
       </div>
-      <a href="/login"><button class="ghost" type="button">Belépés</button></a>
-    </div>
+    </section>
+    <section class="landing-section">
+      <div class="inner">
+        <h3>Hangüzenet, ami megmarad</h3>
+        <p>Küldj és hallgass üzeneteket a családdal — akkor is, ha épp nem tudtok beszélni.</p>
+      </div>
+    </section>
+    <section class="landing-section alt">
+      <div class="inner">
+        <h3>Hang- és videóhívás</h3>
+        <p>Egy gombnyomással csatlakozhatsz — a böngészőben is, teljes kijelzőn.</p>
+      </div>
+    </section>
+    <section class="landing-section">
+      <div class="inner">
+        <h3>Egy család, egy hely</h3>
+        <p>Tagok, meghívók és csomagok a fiókkezelőben. Egyszerűen, zölden, a MyÜzi módjára.</p>
+      </div>
+    </section>
+    <footer class="landing-foot">
+      MyÜzi · <a href="/login">Belépés</a> · <a href="/account">Fiók</a>
+    </footer>
   `,
+    { variant: "landing" },
   );
 }
 
 export function loginPage(error = ""): string {
   return layout(
     "Belépés",
-    `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Email + kód.</p>
-    <div class="panel">
-      <form method="POST" action="/login">
+    authChrome(
+      "Belépés",
+      "Add meg az emailed — küldünk egy 6 jegyű kódot.",
+      `<form method="POST" action="/login">
         <label for="email">Email</label>
-        <input id="email" name="email" type="email" required autocomplete="email" />
+        <input id="email" name="email" type="email" required autocomplete="email" autofocus />
         <label class="switch">
           <input type="checkbox" name="visionAssist" value="1" />
           Látássérült segítség
         </label>
         <button type="submit">Kód küldése</button>
         ${error ? `<p class="error">${escape(error)}</p>` : ""}
-      </form>
-    </div>
-  `,
+      </form>`,
+    ),
+    { variant: "auth" },
   );
 }
 
@@ -185,6 +529,7 @@ export function verifyPage(
   const inviteHidden = inviteToken
     ? `<input type="hidden" name="inviteToken" value="${escape(inviteToken)}" />`
     : "";
+  const title = askName ? "Becenév" : familyName ? "Meghívó" : "Kód";
   const sub = askName
     ? "A kód rendben. Add meg a beceneved."
     : familyName
@@ -216,12 +561,7 @@ export function verifyPage(
       })();
       </script>`;
 
-  return layout(
-    askName ? "Becenév" : familyName ? "Meghívó" : "Kód",
-    `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">${sub}</p>
-    <div class="panel">
+  const form = `
       <form method="POST" action="/login/verify">
         <input type="hidden" name="email" value="${escape(email)}" />
         ${inviteHidden}
@@ -237,28 +577,26 @@ export function verifyPage(
         }
         ${error ? `<p class="error">${escape(error)}</p>` : ""}
       </form>
-      ${resendBlock}
-    </div>
-  `,
-  );
+      ${resendBlock}`;
+
+  return layout(title, authChrome(title, sub, form), { variant: "auth" });
 }
 
 /** Invite link without a locked email — ask for email, then we send the PIN. */
 export function inviteEmailPage(familyName: string, token: string, error = ""): string {
   return layout(
     "Meghívó",
-    `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.</p>
-    ${error ? `<p class="error">${escape(error)}</p>` : ""}
-    <div class="panel">
+    authChrome(
+      "Meghívó",
+      `Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.`,
+      `${error ? `<p class="error">${escape(error)}</p>` : ""}
       <form method="POST" action="/invite/${escape(token)}/start">
         <label for="email">Email címed</label>
         <input id="email" name="email" type="email" required autocomplete="email" autofocus />
         <button type="submit">Kód küldése</button>
-      </form>
-    </div>
-  `,
+      </form>`,
+    ),
+    { variant: "auth" },
   );
 }
 
@@ -333,12 +671,12 @@ export function accountPage(opts: {
                     canRemove
                       ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Eltávolítod ezt a tagot a családból?')">
                           <input type="hidden" name="userId" value="${escape(m.id)}" />
-                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto">Eltávolít</button>
+                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto;min-height:auto">Eltávolít</button>
                         </form>`
                       : canLeave
                         ? `<form method="POST" action="/account/members/remove" style="margin:0" onsubmit="return confirm('Kilépsz a családból?')">
                           <input type="hidden" name="userId" value="${escape(m.id)}" />
-                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto">Kilépek</button>
+                          <button class="ghost" type="submit" style="margin:0;padding:8px 12px;width:auto;min-height:auto">Kilépek</button>
                         </form>`
                         : ""
                   }
@@ -388,16 +726,14 @@ export function accountPage(opts: {
 
   return layout(
     "Fiók",
-    `
-    <h1 class="brand">MyÜzi</h1>
+    pageChrome(
+      `
+    <h1 class="brand-mark">Fiók</h1>
     <p class="sub">${escape(user.name)}</p>
     ${message ? `<p class="ok">${escape(message)}</p>` : ""}
     ${error ? `<p class="error">${escape(error)}</p>` : ""}
     <div class="panel">
       <p><strong>${escape(user.name)}</strong><br/><span class="hint">${escape(user.email)}</span></p>
-      <div class="row">
-        <a href="/app"><button type="button">Beszélgetések</button></a>
-      </div>
       <form method="POST" action="/account/vision">
         <label class="switch">
           <input type="checkbox" name="visionAssist" value="1" ${user.vision_assist ? "checked" : ""} onchange="this.form.submit()" />
@@ -408,7 +744,9 @@ export function accountPage(opts: {
     </div>
     ${familyBlock}
   `,
-    !!user.vision_assist,
+      { userName: user.name },
+    ),
+    { vision: !!user.vision_assist, variant: "page" },
   );
 }
 
@@ -435,8 +773,9 @@ export function plansPage(opts: {
 
   return layout(
     pageTitle,
-    `
-    <h1 class="brand">MyÜzi</h1>
+    pageChrome(
+      `
+    <h1 class="brand-mark">${pageTitle}</h1>
     <p class="sub">${isPaid ? "Csomag módosítása" : "Válassz csomagot"}</p>
     <p class="hint">Upgrade azonnal érvényes. Downgrade a hónap végén lép életbe.</p>
     <div class="panel" style="display:grid;gap:14px">
@@ -480,7 +819,9 @@ export function plansPage(opts: {
       </form>
     </div>
   `,
-    !!user.vision_assist,
+      { userName: user.name },
+    ),
+    { vision: !!user.vision_assist, variant: "page" },
   );
 }
 
@@ -520,8 +861,9 @@ export function billingPage(opts: {
 
   return layout(
     isChange ? "Csomagváltás" : "Számlázás",
-    `
-    <h1 class="brand">MyÜzi</h1>
+    pageChrome(
+      `
+    <h1 class="brand-mark">${isChange ? "Csomagváltás" : "Számlázás"}</h1>
     <p class="sub">${planName} · ${price} Ft/hó</p>
     ${
       isDowngrade
@@ -564,7 +906,9 @@ export function billingPage(opts: {
       </form>
     </div>
   `,
-    !!user.vision_assist,
+      { userName: user.name },
+    ),
+    { vision: !!user.vision_assist, variant: "page" },
   );
 }
 
@@ -594,14 +938,13 @@ export function inviteAcceptPage(
 
   return layout(
     "Meghívó",
-    `
-    <h1 class="brand">MyÜzi</h1>
-    <p class="sub">Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.</p>
-    ${error ? `<p class="error">${escape(error)}</p>` : ""}
-    <div class="panel">
-      ${leaveBlock}
-    </div>
-  `,
+    authChrome(
+      "Meghívó",
+      `Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.`,
+      `${error ? `<p class="error">${escape(error)}</p>` : ""}
+      ${leaveBlock}`,
+    ),
+    { variant: "auth" },
   );
 }
 
