@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env, Variables } from "./types";
 import auth from "./routes/auth";
+import admin from "./routes/admin";
 import billing from "./routes/billing";
 import calls from "./routes/calls";
+import connections from "./routes/connections";
 import conversations from "./routes/conversations";
 import devices from "./routes/devices";
 import families from "./routes/families";
@@ -38,6 +40,7 @@ app.use("/api/*", async (c, next) => {
     const max =
       contentType.startsWith("audio/") ? 20 * 1024 * 1024 :
       contentType.startsWith("image/") ? 1024 * 1024 :
+      contentType.startsWith("multipart/form-data") ? 12 * 1024 * 1024 :
       256 * 1024;
     if (!Number.isFinite(length) || length < 0 || length > max) {
       return c.json({ error: "A kérés túl nagy" }, 413);
@@ -73,12 +76,14 @@ app.get("/health", (c) =>
 );
 
 app.route("/api/auth", auth);
+app.route("/api/admin", admin);
 app.route("/api/users", users);
 app.route("/api/families", families);
 app.route("/api/invites", invites);
 app.route("/api/conversations", conversations);
 app.route("/api/messages", messages);
 app.route("/api/calls", calls);
+app.route("/api/connections", connections);
 app.route("/api/billing", billing);
 app.route("/api/devices", devices);
 app.route("/api/realtime", realtime);

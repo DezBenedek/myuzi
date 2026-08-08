@@ -33,12 +33,14 @@ type SendEmail = {
 interface Env {
   DB: D1Database;
   VOICE: R2Bucket;
+  INVOICES: R2Bucket;
   EMAIL: SendEmail;
   USER_HUB: DurableObjectNamespace;
   APP_NAME: string;
   APP_URL: string;
   LIVEKIT_URL: string;
   FROM_EMAIL: string;
+  SUPERADMIN_EMAILS: string;
   STRIPE_PRICE_FAMILY: string;
   STRIPE_PRICE_FAMILY_PLUS: string;
   SESSION_SECRET: string;
@@ -63,6 +65,7 @@ type UserRow = {
   push_token: string | null;
   push_platform: string | null;
   avatar_key?: string | null;
+  contact_discoverable?: number;
   created_at: string;
   updated_at: string;
 };

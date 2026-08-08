@@ -72,6 +72,29 @@ export function inviteEmail(
   };
 }
 
+export function familyConnectionEmail(
+  appName: string,
+  sourceFamilyName: string,
+  inviterName: string,
+  inviteUrl: string,
+) {
+  const text = `${inviterName} a(z) „${sourceFamilyName}” családból ismerős családi kapcsolatot küldött neked a ${appName} alkalmazásban.\n\nElfogadás: ${inviteUrl}`;
+  const html = `
+    <div style="font-family:system-ui,sans-serif;max-width:420px;margin:0 auto;padding:24px">
+      <h1 style="font-size:22px;margin:0 0 12px">${escapeHtml(appName)}</h1>
+      <p style="font-size:16px"><strong>${escapeHtml(inviterName)}</strong> a(z) <strong>${escapeHtml(sourceFamilyName)}</strong> családból ismerős családi kapcsolatot szeretne létrehozni.</p>
+      <p style="margin:24px 0">
+        <a href="${escapeHtml(inviteUrl)}" style="background:#0B6E4F;color:#fff;text-decoration:none;padding:14px 22px;border-radius:12px;font-size:18px;display:inline-block">Kapcsolat elfogadása</a>
+      </p>
+      <p style="color:#555;font-size:13px">${escapeHtml(inviteUrl)}</p>
+    </div>`;
+  return {
+    subject: `Ismerős család kapcsolat — ${headerSafe(appName)}`,
+    html,
+    text,
+  };
+}
+
 function escapeHtml(s: string): string {
   return s
     .replaceAll("&", "&amp;")

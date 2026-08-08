@@ -13,6 +13,7 @@ import '../../widgets/qr_sheet.dart';
 import 'create_group_sheet.dart';
 import 'email_contact_sheet.dart';
 import 'home_screen.dart';
+import 'nearby_people_sheet.dart';
 
 mixin HomeCreateActions on ConsumerState<HomeScreen> {
   Future<void> showCreateSheet() async {
@@ -43,6 +44,15 @@ mixin HomeCreateActions on ConsumerState<HomeScreen> {
                   onTap: () {
                     Navigator.pop(ctx);
                     messageByEmailDrawer();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.people_alt_outlined),
+                  title: const Text('Közeli ismerősök'),
+                  subtitle: const Text('Ismerős családok és névjegyzék ajánlásai'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    showNearbyPeopleSheet(context, ref);
                   },
                 ),
                 ListTile(

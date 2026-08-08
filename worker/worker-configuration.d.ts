@@ -2,6 +2,7 @@
 interface Env {
   DB: D1Database;
   VOICE: R2Bucket;
+  INVOICES: R2Bucket;
   EMAIL: {
     send(message: {
       to: string | { email: string; name?: string } | Array<string | { email: string; name?: string }>;
@@ -15,6 +16,7 @@ interface Env {
   APP_URL: string;
   LIVEKIT_URL: string;
   FROM_EMAIL: string;
+  SUPERADMIN_EMAILS: string;
   STRIPE_PRICE_FAMILY: string;
   STRIPE_PRICE_FAMILY_PLUS: string;
   SESSION_SECRET: string;

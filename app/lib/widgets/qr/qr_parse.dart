@@ -17,3 +17,23 @@ String? parseQrUserId(String raw) {
   if (RegExp(r'^[A-Za-z0-9_-]{8,80}$').hasMatch(text)) return text;
   return null;
 }
+
+/// Parses a family invite token from a `/invite/{token}` URL or raw token.
+String? parseFamilyInviteToken(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return null;
+  final uri = Uri.tryParse(text);
+  if (uri != null) {
+    final parts = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    final i = parts.indexOf('invite');
+    if (i >= 0 && i + 1 < parts.length) {
+      final token = parts[i + 1];
+      if (RegExp(r'^[A-Fa-f0-9]{32,64}$').hasMatch(token)) return token;
+    }
+  }
+  final m = RegExp(r'(?:^|/)invite/([A-Fa-f0-9]{32,64})').firstMatch(text);
+  final pathToken = m?.group(1);
+  if (pathToken != null) return pathToken;
+  if (RegExp(r'^[A-Fa-f0-9]{32,64}$').hasMatch(text)) return text;
+  return null;
+}

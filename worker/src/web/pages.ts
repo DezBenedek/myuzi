@@ -1,5 +1,4 @@
 import type { UserRow } from "../types";
-import type { InvoiceSummary } from "../lib/stripe";
 
 const css = `
 :root {
@@ -537,6 +536,13 @@ dialog.billing-dialog::backdrop {
 .plan-option strong { display: block; font-size: 1.15rem; }
 .plan-option .price { color: var(--brand); font-weight: 800; margin: 4px 0; }
 .plan-option .features { color: var(--muted); font-size: .9rem; }
+.plan-cta {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--brand);
+  font-weight: 800;
+}
+.danger { color: #b42318 !important; }
 .invoice-list { display: grid; gap: 8px; }
 .invoice-row {
   display: flex;
@@ -558,6 +564,52 @@ dialog.billing-dialog::backdrop {
   font-size: .85rem;
   font-weight: 800;
   text-decoration: none;
+}
+.admin-main {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 28px 18px calc(44px + var(--safe-bottom));
+}
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, .8fr) minmax(360px, 1.2fr);
+  gap: 18px;
+}
+.admin-panel {
+  padding: 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.admin-panel h2 { margin-top: 0; font-family: var(--display); }
+.admin-results { display: grid; gap: 6px; margin-top: 10px; }
+.admin-family-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.admin-family-option:has(input:checked) {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+}
+.admin-family-option small { display: block; color: var(--muted); }
+.admin-invoice-list { display: grid; gap: 8px; }
+.admin-invoice-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.admin-invoice-item small { display: block; color: var(--muted); }
+.admin-invoice-item button { width: auto; min-height: 38px; margin: 0; padding: 8px 10px; }
+@media (max-width: 760px) {
+  .admin-grid { grid-template-columns: 1fr; }
 }
 @keyframes dialogIn {
   from { opacity: 0; transform: translateY(12px) scale(.98); }
@@ -722,13 +774,14 @@ export function landingPage(opts?: { loggedIn?: boolean; userName?: string }): s
   );
 }
 
-export function loginPage(error = ""): string {
+export function loginPage(error = "", connectionToken = ""): string {
   return layout(
     "Belépés",
     authChrome(
       "Belépés",
       "Add meg az emailed — küldünk egy 6 jegyű kódot.",
       `<form method="POST" action="/login">
+        ${connectionToken ? `<input type="hidden" name="connectionToken" value="${escape(connectionToken)}" />` : ""}
         <label for="email">Email</label>
         <input id="email" name="email" type="email" required autocomplete="email" autofocus />
         <label class="switch">
@@ -748,18 +801,34 @@ export function verifyPage(
   error = "",
   askName = false,
   verifiedCode = "",
-  opts?: { inviteToken?: string; familyName?: string },
+  opts?: {
+    inviteToken?: string;
+    familyName?: string;
+    connectionToken?: string;
+  },
 ): string {
   const inviteToken = opts?.inviteToken ?? "";
+  const connectionToken = opts?.connectionToken ?? "";
   const familyName = opts?.familyName ?? "";
   const inviteHidden = inviteToken
     ? `<input type="hidden" name="inviteToken" value="${escape(inviteToken)}" />`
     : "";
-  const title = askName ? "Becenév" : familyName ? "Meghívó" : "Kód";
+  const connectionHidden = connectionToken
+    ? `<input type="hidden" name="connectionToken" value="${escape(connectionToken)}" />`
+    : "";
+  const title = askName
+    ? "Becenév"
+    : familyName
+      ? "Meghívó"
+      : connectionToken
+        ? "Ismerős család"
+        : "Kód";
   const sub = askName
     ? "A kód rendben. Add meg a beceneved."
     : familyName
       ? `Meghívó: <strong>${escape(familyName)}</strong><br/>Kódot küldtünk ide: <strong>${escape(email)}</strong>`
+      : connectionToken
+        ? `Ismerős családi kapcsolat<br/>Kódot küldtünk ide: <strong>${escape(email)}</strong>`
       : `Kód: <strong>${escape(email)}</strong>`;
 
   const resendBlock = askName
@@ -791,6 +860,7 @@ export function verifyPage(
       <form method="POST" action="/login/verify">
         <input type="hidden" name="email" value="${escape(email)}" />
         ${inviteHidden}
+        ${connectionHidden}
         ${
           askName
             ? `<input type="hidden" name="code" value="${escape(verifiedCode)}" />
@@ -924,7 +994,7 @@ export function accountPage(opts: {
         <p class="plan-current">Jelenlegi csomagod: ${currentPlan}</p>
         <p class="hint">${planLimits}</p>
         ${planStatusHint ? `<p class="ok">${planStatusHint}</p>` : ""}
-        <form method="GET" action="/account/plans" style="margin-top:14px">
+        <form method="GET" action="/account/subscription" style="margin-top:14px">
           <button type="submit">${planCta}</button>
         </form>
         ${
@@ -987,15 +1057,15 @@ export function plansPage(opts: {
   const pageTitle = isPaid ? "Csomagmódosítás" : "Előfizetés";
 
   const familyBtn = familyActive
-    ? "Jelenlegi csomag"
+    ? "Aktív csomag"
     : plusActive
       ? "Váltás hónap végén"
-      : "Ezt választom";
+      : "Előfizetés";
   const plusBtn = plusActive
-    ? "Jelenlegi csomag"
+    ? "Aktív csomag"
     : familyActive
       ? "Váltás most"
-      : "Ezt választom";
+      : "Előfizetés";
 
   return layout(
     pageTitle,
@@ -1138,6 +1208,15 @@ export function billingPage(opts: {
   );
 }
 
+type ManualInvoiceSummary = {
+  id: string;
+  number: string;
+  issuedAt: string;
+  amount: number;
+  currency: string;
+  periodLabel: string | null;
+};
+
 export function subscriptionPortalPage(opts: {
   user: UserRow;
   family: {
@@ -1147,6 +1226,7 @@ export function subscriptionPortalPage(opts: {
     owner_id: string;
     stripe_status: string | null;
     stripe_customer_id: string | null;
+    stripe_subscription_id: string | null;
   } | null;
   billing: {
     billing_type?: string | null;
@@ -1157,7 +1237,7 @@ export function subscriptionPortalPage(opts: {
     billing_postal_code?: string | null;
     billing_country?: string | null;
   } | null;
-  invoices: InvoiceSummary[];
+  invoices: ManualInvoiceSummary[];
   isOwner: boolean;
   message?: string;
   error?: string;
@@ -1203,18 +1283,11 @@ export function subscriptionPortalPage(opts: {
   const invoiceRows = invoices.length
     ? invoices
         .map((invoice) => {
-          const date = new Date(invoice.created * 1000).toLocaleDateString("hu-HU");
-          const zeroDecimal = new Set([
-            "bif", "clp", "djf", "gnf", "huf", "jpy", "kmf", "krw",
-            "mga", "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf",
-          ]);
-          const amountValue = zeroDecimal.has(invoice.currency.toLowerCase())
-            ? invoice.amountPaid
-            : invoice.amountPaid / 100;
-          const amount = `${amountValue.toLocaleString("hu-HU")} ${invoice.currency.toUpperCase()}`;
+          const date = new Date(`${invoice.issuedAt}T00:00:00`).toLocaleDateString("hu-HU");
+          const amount = `${invoice.amount.toLocaleString("hu-HU")} ${invoice.currency.toUpperCase()}`;
           const number = invoice.number || invoice.id;
           return `<div class="invoice-row">
-            <span><strong>${escape(number)}</strong><small>${escape(date)} · ${escape(invoice.status || "számla")} · ${escape(amount)}</small></span>
+            <span><strong>${escape(number)}</strong><small>${escape(date)}${invoice.periodLabel ? ` · ${escape(invoice.periodLabel)}` : ""} · ${escape(amount)}</small></span>
             <a href="/api/billing/invoices/${encodeURIComponent(invoice.id)}/download">PDF</a>
           </div>`;
         })
@@ -1258,9 +1331,9 @@ export function subscriptionPortalPage(opts: {
             : `<section class="billing-family"><div><strong>Nincs család</strong><span>Előbb hozz létre vagy fogadj el egy családi meghívót.</span></div></section>`
         }
         <section class="billing-actions" aria-label="Fiókkezelési lehetőségek">
-          <button class="billing-action" type="button" data-dialog="plansDialog" ${family && isOwner ? "" : "disabled"}>
+          <button class="billing-action" type="button" data-dialog="plansDialog" ${family && isOwner && billingComplete ? "" : "disabled"}>
             <span class="action-icon">↕</span>
-            <span class="action-copy"><strong>Csomag módosítása</strong><small>${isOwner ? "Válassz a Család és Család+ csomagok közül" : "Csak a család tulajdonosa módosíthatja"}</small></span>
+            <span class="action-copy"><strong>Csomag módosítása</strong><small>${!billingComplete ? "Előbb töltsd ki a számlázási adatokat" : isOwner ? "Válassz a Család és Család+ csomagok közül" : "Csak a család tulajdonosa módosíthatja"}</small></span>
             <span class="chevron">›</span>
           </button>
           <button class="billing-action" type="button" data-dialog="detailsDialog" ${family && isOwner ? "" : "disabled"}>
@@ -1340,22 +1413,39 @@ export function subscriptionPortalPage(opts: {
             <form method="POST" action="/account/checkout">
               <input type="hidden" name="plan" value="family" />
               ${hiddenBilling}
-              <button class="plan-option ${family?.plan === "family" ? "current" : ""}" type="submit" ${billingComplete ? "" : "disabled"}>
+              <button class="plan-option ${family?.plan === "family" ? "current" : ""}" type="submit" ${billingComplete && family?.plan !== "family" ? "" : "disabled"}>
                 <strong>Család</strong>
                 <div class="price">1 990 Ft / hó</div>
                 <div class="features">6 tag · 10 perc hangüzenet · hívások és csoportok</div>
+                <span class="plan-cta">${family?.plan === "family" ? "Aktív csomag" : "Előfizetés"}</span>
               </button>
             </form>
             <form method="POST" action="/account/checkout">
               <input type="hidden" name="plan" value="family_plus" />
               ${hiddenBilling}
-              <button class="plan-option ${family?.plan === "family_plus" ? "current" : ""}" type="submit" ${billingComplete ? "" : "disabled"}>
+              <button class="plan-option ${family?.plan === "family_plus" ? "current" : ""}" type="submit" ${billingComplete && family?.plan !== "family_plus" ? "" : "disabled"}>
                 <strong>Család+</strong>
                 <div class="price">4 990 Ft / hó</div>
                 <div class="features">25 tag · 20 perc hangüzenet · hívások és csoportok</div>
+                <span class="plan-cta">${family?.plan === "family_plus" ? "Aktív csomag" : "Előfizetés"}</span>
               </button>
             </form>
           </div>
+          ${
+            family?.stripe_subscription_id
+              ? `<div class="dialog-actions">
+                  ${
+                    family.stripe_status === "canceling"
+                      ? `<form method="POST" action="/account/resume-subscription">
+                          <button class="ghost" type="submit">Előfizetés folytatása</button>
+                        </form>`
+                      : `<form method="POST" action="/account/cancel-subscription">
+                          <button class="ghost danger" type="submit">Előfizetés lemondása</button>
+                        </form>`
+                  }
+                </div>`
+              : ""
+          }
           <div class="dialog-actions">
             <button class="ghost" type="button" data-close="plansDialog">Mégse</button>
           </div>
@@ -1402,6 +1492,153 @@ export function subscriptionPortalPage(opts: {
   );
 }
 
+export function adminInvoicesPage(opts: {
+  user: UserRow;
+  invoices: Array<{
+    id: string;
+    invoice_number: string;
+    issued_at: string;
+    amount: number;
+    currency: string;
+    period_label: string | null;
+    family_name: string;
+    owner_email: string;
+  }>;
+  message?: string;
+  error?: string;
+}): string {
+  const invoiceRows = opts.invoices.length
+    ? opts.invoices
+        .map(
+          (invoice) => `<div class="admin-invoice-item">
+            <span>
+              <strong>${escape(invoice.invoice_number)}</strong>
+              <small>${escape(invoice.family_name)} · ${escape(invoice.owner_email)} · ${escape(invoice.issued_at)}</small>
+            </span>
+            <button class="ghost" type="button" data-void="${escape(invoice.id)}">Visszavonás</button>
+          </div>`,
+        )
+        .join("")
+    : `<p class="hint">Még nincs feltöltött számla.</p>`;
+
+  return layout(
+    "Superadmin számlák",
+    `
+    <div class="billing-portal">
+      <header class="billing-top">
+        <a class="logo" href="/">MyÜzi</a>
+        <span class="context">Superadmin · ${escape(opts.user.email)}</span>
+      </header>
+      <main class="admin-main">
+        <h1 class="brand-mark">Saját számlák</h1>
+        <p class="sub">PDF számlák feltöltése és családhoz rendelése.</p>
+        ${opts.message ? `<p class="billing-alert">${escape(opts.message)}</p>` : ""}
+        ${opts.error ? `<p class="billing-alert error">${escape(opts.error)}</p>` : ""}
+        <div class="admin-grid">
+          <section class="admin-panel">
+            <h2>Számla feltöltése</h2>
+            <form id="invoiceForm">
+              <label for="familySearch">Család keresése</label>
+              <input id="familySearch" autocomplete="off" placeholder="Családnév vagy tulajdonos emailje" />
+              <div class="admin-results" id="familyResults">
+                <p class="hint">Írj be legalább két karaktert.</p>
+              </div>
+              <input type="hidden" id="familyId" name="familyId" required />
+              <p class="hint" id="selectedFamily">Nincs kiválasztott család.</p>
+              <label for="invoiceNumber">Számlaszám</label>
+              <input id="invoiceNumber" name="invoiceNumber" required placeholder="MYU-2026-0001" />
+              <label for="issuedAt">Kiállítás dátuma</label>
+              <input id="issuedAt" name="issuedAt" type="date" required />
+              <label for="amount">Összeg</label>
+              <input id="amount" name="amount" type="number" min="0" step="1" value="0" required />
+              <label for="currency">Pénznem</label>
+              <input id="currency" name="currency" value="HUF" maxlength="3" required />
+              <label for="periodLabel">Időszak (opcionális)</label>
+              <input id="periodLabel" name="periodLabel" placeholder="2026. augusztus" />
+              <label for="invoiceFile">PDF fájl</label>
+              <input id="invoiceFile" name="file" type="file" accept="application/pdf,.pdf" required />
+              <button type="submit">PDF feltöltése</button>
+              <p class="hint" id="formStatus"></p>
+            </form>
+          </section>
+          <section class="admin-panel">
+            <h2>Feltöltött számlák</h2>
+            <div class="admin-invoice-list" id="invoiceList">${invoiceRows}</div>
+          </section>
+        </div>
+      </main>
+      <script>
+      (() => {
+        const search = document.getElementById('familySearch');
+        const results = document.getElementById('familyResults');
+        const familyId = document.getElementById('familyId');
+        const selected = document.getElementById('selectedFamily');
+        const status = document.getElementById('formStatus');
+        let timer = null;
+        const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({
+          '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[c]));
+        async function findFamilies() {
+          const q = search.value.trim();
+          if (q.length < 2) {
+            results.innerHTML = '<p class="hint">Írj be legalább két karaktert.</p>';
+            return;
+          }
+          const res = await fetch('/api/admin/families?q=' + encodeURIComponent(q), { credentials:'include' });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Keresés sikertelen');
+          results.innerHTML = (data.families || []).map((family) =>
+            '<label class="admin-family-option">' +
+            '<input type="radio" name="familyChoice" value="' + esc(family.id) + '" data-name="' + esc(family.name) + '">' +
+            '<span><strong>' + esc(family.name) + '</strong><small>' + esc(family.owner_name) + ' · ' + esc(family.owner_email) + '</small></span>' +
+            '</label>'
+          ).join('') || '<p class="hint">Nincs találat.</p>';
+          results.querySelectorAll('input[name="familyChoice"]').forEach((input) => {
+            input.addEventListener('change', () => {
+              familyId.value = input.value;
+              selected.textContent = 'Kiválasztva: ' + input.dataset.name;
+            });
+          });
+        }
+        search.addEventListener('input', () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => findFamilies().catch((e) => status.textContent = e.message), 250);
+        });
+        document.getElementById('invoiceForm').addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!familyId.value) { status.textContent = 'Válassz családot.'; return; }
+          status.textContent = 'Feltöltés…';
+          try {
+            const res = await fetch('/api/admin/invoices', {
+              method: 'POST',
+              credentials: 'include',
+              body: new FormData(event.currentTarget),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Feltöltés sikertelen');
+            status.textContent = 'Feltöltve. Az oldal frissül…';
+            location.reload();
+          } catch (error) {
+            status.textContent = error.message || 'Feltöltés sikertelen';
+          }
+        });
+        document.querySelectorAll('[data-void]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            if (!confirm('Visszavonod ezt a számlát?')) return;
+            const res = await fetch('/api/admin/invoices/' + encodeURIComponent(button.dataset.void), {
+              method: 'DELETE', credentials:'include'
+            });
+            if (res.ok) location.reload();
+          });
+        });
+      })();
+      </script>
+    </div>
+  `,
+    { vision: !!opts.user.vision_assist, variant: "page" },
+  );
+}
+
 export function inviteAcceptPage(
   familyName: string,
   token: string,
@@ -1433,6 +1670,30 @@ export function inviteAcceptPage(
       `Meghívót kaptál a(z) <strong>${escape(familyName)}</strong> családba.`,
       `${error ? `<p class="error">${escape(error)}</p>` : ""}
       ${leaveBlock}`,
+    ),
+    { variant: "auth" },
+  );
+}
+
+export function familyConnectionPage(opts: {
+  familyName: string;
+  inviterName: string;
+  token: string;
+  loggedIn: boolean;
+  error?: string;
+}): string {
+  const content = opts.loggedIn
+    ? `<form method="POST" action="/family-link/${escape(opts.token)}/accept">
+        <button type="submit">Kapcsolat elfogadása</button>
+      </form>`
+    : `<p class="hint">A kapcsolat elfogadásához jelentkezz be a tulajdonosi fiókoddal.</p>
+       <a href="/login?connection=${encodeURIComponent(opts.token)}"><button type="button">Belépés</button></a>`;
+  return layout(
+    "Ismerős család",
+    authChrome(
+      "Ismerős család",
+      `<strong>${escape(opts.inviterName)}</strong> a(z) <strong>${escape(opts.familyName)}</strong> családból kapcsolatot küldött.`,
+      `${opts.error ? `<p class="error">${escape(opts.error)}</p>` : ""}${content}`,
     ),
     { variant: "auth" },
   );

@@ -1,6 +1,7 @@
 // Thin re-export so existing imports (`models/models.dart`) keep working.
 export 'call_session.dart';
 export 'conversation.dart';
+export 'connections.dart';
 export 'billing.dart';
 export 'family.dart';
 export 'user.dart';

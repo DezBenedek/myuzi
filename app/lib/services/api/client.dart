@@ -12,6 +12,7 @@ import '../../providers/connectivity_provider.dart';
 part 'auth_api.dart';
 part 'billing_api.dart';
 part 'calls_api.dart';
+part 'connections_api.dart';
 part 'conversations_api.dart';
 part 'devices_api.dart';
 part 'families_api.dart';
@@ -156,6 +157,7 @@ class ApiClient extends ApiClientBase
     with
         AuthApi,
         BillingApi,
+        ConnectionsApi,
         FamiliesApi,
         ConversationsApi,
         MessagesApi,

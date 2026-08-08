@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'api_client.dart';
+
 typedef RealtimeHandler = void Function(Map<String, dynamic> event);
 typedef RealtimeTicketProvider = Future<String> Function();
 
@@ -106,6 +108,16 @@ class RealtimeService {
           _channel?.sink.add(jsonEncode({'type': 'ping'}));
         } catch (_) {}
       });
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        // The auth provider clears the stale session. Do not keep a dead
+        // ticket in a reconnect loop while the user is logged out.
+        disconnect();
+        debugPrint('[realtime] session expired');
+      } else {
+        debugPrint('[realtime] open failed: ${e.message}');
+        _scheduleReconnect();
+      }
     } catch (e) {
       debugPrint('[realtime] open failed: $e');
       _scheduleReconnect();

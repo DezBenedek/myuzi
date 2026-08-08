@@ -7,9 +7,9 @@ import {
   getUserFamily,
   hasPaidPlan,
   isConversationMember,
-  isFamilyMember,
   memberCount,
 } from "../lib/db";
+import { canDirectConnect } from "../lib/connections";
 import { inviteEmail, sendEmail } from "../lib/email";
 import { publicBaseUrl } from "../lib/urls";
 import { readLimitedJson } from "../lib/body";
@@ -54,10 +54,10 @@ async function openOrCreateDirect(
       `SELECT c.id FROM conversations c
        JOIN conversation_members a ON a.conversation_id = c.id AND a.user_id = ?
        JOIN conversation_members b ON b.conversation_id = c.id AND b.user_id = ?
-       WHERE c.family_id = ? AND c.type = 'direct'
-       LIMIT 1`,
+       WHERE c.type = 'direct'
+       ORDER BY c.created_at DESC LIMIT 1`,
     )
-    .bind(me, otherId, familyId)
+    .bind(me, otherId)
     .first<{ id: string }>();
 
   if (existing) return existing.id;
@@ -103,14 +103,13 @@ conversations.get("/", async (c) => {
       ) AS unread_count
      FROM conversations c
      JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ?
-     WHERE c.family_id = ?
      ORDER BY
        CASE WHEN cm.pinned_at IS NULL THEN 1 ELSE 0 END,
        COALESCE(cm.pinned_at, '') DESC,
        COALESCE(last_message_at, c.created_at) DESC
      LIMIT 100`,
   )
-    .bind(userId, userId, family.id)
+    .bind(userId, userId)
     .all<{
       id: string;
       family_id: string;
@@ -204,8 +203,8 @@ conversations.post("/direct", async (c) => {
   if (otherId === c.get("userId")) {
     return c.json({ error: "Saját magaddal nem nyithatsz beszélgetést" }, 400);
   }
-  if (!(await isFamilyMember(c.env.DB, family.id, otherId))) {
-    return c.json({ error: "Nem családtag" }, 403);
+  if (!(await canDirectConnect(c.env.DB, c.get("userId"), otherId))) {
+    return c.json({ error: "Előbb kapcsolódjatok össze" }, 403);
   }
 
   const conversationId = await openOrCreateDirect(
@@ -235,6 +234,7 @@ conversations.post("/direct-by-email", async (c) => {
   if (email === c.get("user").email) {
     return c.json({ error: "Saját magadnak nem küldhetsz így üzenetet" }, 400);
   }
+  const existingUser = await getUserByEmail(c.env.DB, email);
 
   const member = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.email FROM family_members fm
@@ -246,6 +246,15 @@ conversations.post("/direct-by-email", async (c) => {
 
   if (member) {
     const conversationId = await openOrCreateDirect(c.env.DB, family.id, me, member.id);
+    return c.json({ conversationId, status: "opened" });
+  }
+  if (existingUser && (await canDirectConnect(c.env.DB, me, existingUser.id))) {
+    const conversationId = await openOrCreateDirect(
+      c.env.DB,
+      family.id,
+      me,
+      existingUser.id,
+    );
     return c.json({ conversationId, status: "opened" });
   }
 
@@ -274,7 +283,6 @@ conversations.post("/direct-by-email", async (c) => {
   }
 
   // If registered elsewhere but not in this family — still invite by email
-  const existingUser = await getUserByEmail(c.env.DB, email);
   const token = inviteToken();
   const inviteId = id("inv");
   await c.env.DB.prepare(
@@ -336,8 +344,8 @@ conversations.post("/group", async (c) => {
   const me = c.get("userId");
   const unique = [...new Set([me, ...memberIds])];
   for (const uid of unique) {
-    if (!(await isFamilyMember(c.env.DB, family.id, uid))) {
-      return c.json({ error: "Minden tagnak családtagjának kell lennie" }, 403);
+    if (uid !== me && !(await canDirectConnect(c.env.DB, me, uid))) {
+      return c.json({ error: "A csoport minden tagjával előbb kapcsolat kell" }, 403);
     }
   }
 

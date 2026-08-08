@@ -63,4 +63,12 @@ mixin BillingApi on ApiClientBase {
         .map((item) => BillingInvoice.fromJson(Map<String, dynamic>.from(item)))
         .toList();
   }
+
+  Future<Uint8List> downloadInvoice(BillingInvoice invoice) {
+    final path = invoice.downloadPath;
+    if (path == null || path.isEmpty) {
+      throw ApiException('Ehhez a számlához nincs PDF');
+    }
+    return downloadBytes(path);
+  }
 }

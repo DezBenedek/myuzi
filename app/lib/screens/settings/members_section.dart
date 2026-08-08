@@ -11,6 +11,7 @@ import '../../services/toast.dart';
 import '../../widgets/user_avatar.dart';
 import '../../widgets/widgets.dart';
 import 'confirm_action_sheet.dart';
+import 'family_connections_sheet.dart';
 import 'invite_sheet.dart';
 
 class SettingsMembersSection extends ConsumerWidget {
@@ -89,6 +90,15 @@ class SettingsMembersSection extends ConsumerWidget {
               Expanded(
                 child: Text('Családtagok', style: t.textTheme.titleLarge),
               ),
+              if (isOwner && fam != null)
+                IconButton(
+                  tooltip: 'Ismerős családok',
+                  onPressed: () => showFamilyConnectionsSheet(context, ref),
+                  icon: Icon(
+                    Icons.family_restroom_outlined,
+                    color: t.colorScheme.primary,
+                  ),
+                ),
               if (fam != null)
                 IconButton(
                   tooltip: 'Meghívó',

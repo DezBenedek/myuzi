@@ -58,9 +58,6 @@ export async function isConversationMember(
     .prepare(
       `SELECT 1 AS ok
        FROM conversation_members cm
-       JOIN conversations c ON c.id = cm.conversation_id
-       JOIN family_members fm
-         ON fm.family_id = c.family_id AND fm.user_id = cm.user_id
        WHERE cm.conversation_id = ? AND cm.user_id = ?`,
     )
     .bind(conversationId, userId)

@@ -3,9 +3,7 @@ import type { Env, Variables } from "../types";
 import { getFamily, getUserFamily, publicFamily } from "../lib/db";
 import {
   getStripe,
-  getCustomerInvoice,
   hasPaidPlan,
-  listCustomerInvoices,
   maxMembersForPlan,
   planFromPriceId,
   PLAN_FEATURES,
@@ -157,44 +155,68 @@ billing.get("/invoices", requireAuth, async (c) => {
   if (family.owner_id !== c.get("userId")) {
     return c.json({ error: "Csak a család tulajdonosa láthatja a számlákat" }, 403);
   }
-  if (!family.stripe_customer_id) return c.json({ invoices: [] });
 
-  try {
-    const invoices = await listCustomerInvoices(
-      getStripe(c.env),
-      family.stripe_customer_id,
-    );
-    return c.json({ invoices });
-  } catch (err) {
-    console.error("[billing invoices]", err);
-    return c.json({ error: "A számlák betöltése sikertelen" }, 502);
-  }
+  const rows = await c.env.DB.prepare(
+    `SELECT id, invoice_number, issued_at, amount, currency, period_label
+     FROM manual_invoices
+     WHERE family_id = ? AND voided_at IS NULL
+     ORDER BY issued_at DESC, created_at DESC
+     LIMIT 100`,
+  )
+    .bind(family.id)
+    .all<{
+      id: string;
+      invoice_number: string;
+      issued_at: string;
+      amount: number;
+      currency: string;
+      period_label: string | null;
+    }>();
+
+  return c.json({
+    invoices: (rows.results ?? []).map((invoice) => ({
+      id: invoice.id,
+      number: invoice.invoice_number,
+      issuedAt: invoice.issued_at,
+      amount: invoice.amount,
+      currency: invoice.currency,
+      periodLabel: invoice.period_label,
+      downloadPath: `/api/billing/invoices/${invoice.id}/download`,
+    })),
+  });
 });
 
 billing.get("/invoices/:id/download", requireAuth, async (c) => {
   const invoiceId = c.req.param("id");
-  if (!/^in_[A-Za-z0-9]+$/.test(invoiceId)) {
+  if (!/^minv_[A-Za-z0-9_-]+$/.test(invoiceId)) {
     return c.json({ error: "Érvénytelen számla" }, 400);
   }
 
   const family = await getUserFamily(c.env.DB, c.get("userId"));
-  if (!family?.stripe_customer_id || family.owner_id !== c.get("userId")) {
+  if (!family || family.owner_id !== c.get("userId")) {
     return c.json({ error: "Nincs jogosultság" }, 403);
   }
 
-  try {
-    const invoice = await getCustomerInvoice(
-      getStripe(c.env),
-      family.stripe_customer_id,
-      invoiceId,
-    );
-    const url = invoice?.invoice_pdf ?? invoice?.hosted_invoice_url;
-    if (!url) return c.json({ error: "Ehhez a számlához nincs PDF" }, 404);
-    return c.redirect(url);
-  } catch (err) {
-    console.error("[billing invoice download]", err);
-    return c.json({ error: "A számla nem tölthető le" }, 502);
-  }
+  const invoice = await c.env.DB.prepare(
+    `SELECT invoice_number, filename, r2_key
+     FROM manual_invoices
+     WHERE id = ? AND family_id = ? AND voided_at IS NULL`,
+  )
+    .bind(invoiceId, family.id)
+    .first<{ invoice_number: string; filename: string; r2_key: string }>();
+  if (!invoice) return c.json({ error: "Számla nem található" }, 404);
+
+  const object = await c.env.INVOICES.get(invoice.r2_key);
+  if (!object) return c.json({ error: "A számlafájl hiányzik" }, 404);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("Content-Type", "application/pdf");
+  headers.set(
+    "Content-Disposition",
+    `attachment; filename="${invoice.invoice_number.replace(/[^A-Za-z0-9._-]/g, "_")}.pdf"`,
+  );
+  headers.set("Cache-Control", "private, no-store");
+  return new Response(object.body, { headers });
 });
 
 billing.post("/checkout", requireAuth, async (c) => {

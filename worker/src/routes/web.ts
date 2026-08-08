@@ -30,15 +30,17 @@ import {
   getStripe,
   changePaidPlan,
   cancelAtPeriodEnd,
-  listCustomerInvoices,
   resumeSubscription,
 } from "../lib/stripe";
 import { applyPlan, normalizeBillingDetails } from "./billing";
+import { isSuperadmin } from "./admin";
 import { publicBaseUrl } from "../lib/urls";
 import { optionalAuth } from "../middleware/auth";
 import {
   accountPage,
+  adminInvoicesPage,
   billingPage,
+  familyConnectionPage,
   inviteAcceptPage,
   inviteEmailPage,
   landingPage,
@@ -246,7 +248,9 @@ web.get("/u/:userId", optionalAuth, async (c) => {
   return c.html(userQrPage({ userId, meId: me?.id ?? null, loggedIn: !!me }));
 });
 
-web.get("/login", (c) => c.html(loginPage()));
+web.get("/login", (c) =>
+  c.html(loginPage("", String(c.req.query("connection") ?? "").trim())),
+);
 
 /** App → web SSO: one-time token becomes cookie session. */
 web.get("/auth/bridge", async (c) => {
@@ -289,22 +293,31 @@ web.post("/login", async (c) => {
   const form = await c.req.parseBody();
   const email = normalizeEmail(String(form.email ?? ""));
   const visionAssist = form.visionAssist === "1" ? 1 : 0;
+  const connectionToken = String(form.connectionToken ?? "").trim();
 
   if (!isValidEmail(email)) {
-    return c.html(loginPage("Érvényes email kell."), 400);
+    return c.html(loginPage("Érvényes email kell.", connectionToken), 400);
   }
 
   try {
     const sent = await sendLoginPin(c.env, email, visionAssist);
     if (sent === "rate_limited") {
-      return c.html(verifyPage(email, "Kérj új kódot 30 másodperc múlva."), 429);
+      return c.html(
+        verifyPage(email, "Kérj új kódot 30 másodperc múlva.", false, "", {
+          connectionToken,
+        }),
+        429,
+      );
     }
   } catch (err) {
     console.error("[login email]", err);
-    return c.html(loginPage("A kód küldése nem sikerült. Próbáld újra."), 500);
+    return c.html(
+      loginPage("A kód küldése nem sikerült. Próbáld újra.", connectionToken),
+      500,
+    );
   }
 
-  return c.html(verifyPage(email));
+  return c.html(verifyPage(email, "", false, "", { connectionToken }));
 });
 
 web.post("/login/verify", async (c) => {
@@ -313,6 +326,7 @@ web.post("/login/verify", async (c) => {
   const code = String(form.code ?? "").trim();
   const name = cleanDisplayName(String(form.name ?? ""));
   const inviteToken = String(form.inviteToken ?? "").trim();
+  const connectionToken = String(form.connectionToken ?? "").trim();
   if (!isValidEmail(email)) {
     return c.html(loginPage("Érvénytelen email cím."), 400);
   }
@@ -329,6 +343,24 @@ web.post("/login/verify", async (c) => {
         return { inviteToken, familyName: inv.family_name };
       })()
     : undefined;
+  const connectionOpts = connectionToken
+    ? await (async () => {
+        const connection = await c.env.DB.prepare(
+          `SELECT f.name AS family_name FROM family_link_invites i
+           JOIN families f ON f.id = i.source_family_id
+           WHERE i.token = ? AND i.status = 'pending' AND i.expires_at > datetime('now')`,
+        )
+          .bind(connectionToken)
+          .first<{ family_name: string }>();
+        return connection
+          ? { connectionToken, familyName: connection.family_name }
+          : undefined;
+      })()
+    : undefined;
+  const authFlowOpts =
+    inviteOpts || connectionOpts
+      ? { ...(inviteOpts ?? {}), ...(connectionOpts ?? {}) }
+      : undefined;
 
   const row = await c.env.DB.prepare(
     "SELECT * FROM auth_codes WHERE email = ? ORDER BY created_at DESC LIMIT 1",
@@ -345,7 +377,7 @@ web.post("/login/verify", async (c) => {
 
   if (!row || isExpired(row.expires_at) || row.attempts >= 5) {
     return c.html(
-      verifyPage(email, "A kód lejárt vagy túl sok próbálkozás.", false, "", inviteOpts),
+      verifyPage(email, "A kód lejárt vagy túl sok próbálkozás.", false, "", authFlowOpts),
       400,
     );
   }
@@ -355,7 +387,7 @@ web.post("/login/verify", async (c) => {
     await c.env.DB.prepare("UPDATE auth_codes SET attempts = attempts + 1 WHERE id = ?")
       .bind(row.id)
       .run();
-    return c.html(verifyPage(email, "Hibás kód.", false, "", inviteOpts), 400);
+    return c.html(verifyPage(email, "Hibás kód.", false, "", authFlowOpts), 400);
   }
 
   let user = await getUserByEmail(c.env.DB, email);
@@ -367,7 +399,7 @@ web.post("/login/verify", async (c) => {
           name ? "A becenév legalább 2 karakter legyen." : "",
           true,
           code,
-          inviteOpts,
+          authFlowOpts,
         ),
         name ? 400 : 200,
       );
@@ -409,6 +441,9 @@ web.post("/login/verify", async (c) => {
       }
       return c.redirect("/app");
     }
+  }
+  if (connectionToken) {
+    return c.redirect(`/family-link/${encodeURIComponent(connectionToken)}`);
   }
 
   return c.redirect("/app");
@@ -453,20 +488,83 @@ web.get("/account", optionalAuth, async (c) => {
   return c.html(accountPage({ user, family, members, message }));
 });
 
+web.get("/admin/invoices", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+  if (!isSuperadmin(user.email, c.env.SUPERADMIN_EMAILS ?? "")) {
+    return c.text("Superadmin jogosultság szükséges", 403);
+  }
+
+  const rows = await c.env.DB.prepare(
+    `SELECT i.id, i.invoice_number, i.issued_at, i.amount, i.currency,
+            i.period_label, f.name AS family_name, u.email AS owner_email
+     FROM manual_invoices i
+     JOIN families f ON f.id = i.family_id
+     JOIN users u ON u.id = f.owner_id
+     WHERE i.voided_at IS NULL
+     ORDER BY i.issued_at DESC, i.created_at DESC
+     LIMIT 200`,
+  )
+    .all<{
+      id: string;
+      invoice_number: string;
+      issued_at: string;
+      amount: number;
+      currency: string;
+      period_label: string | null;
+      family_name: string;
+      owner_email: string;
+    }>();
+
+  return c.html(
+    adminInvoicesPage({
+      user,
+      invoices: rows.results ?? [],
+    }),
+  );
+});
+
 web.get("/account/subscription", optionalAuth, async (c) => {
   const user = c.get("user");
   if (!user) return c.redirect("/login");
 
   const family = await getUserFamily(c.env.DB, user.id);
   const isOwner = !!family && family.owner_id === user.id;
-  let invoices: Awaited<ReturnType<typeof listCustomerInvoices>> = [];
+  let invoices: Array<{
+    id: string;
+    number: string;
+    issuedAt: string;
+    amount: number;
+    currency: string;
+    periodLabel: string | null;
+  }> = [];
   let invoiceError: string | undefined;
-  if (isOwner && family?.stripe_customer_id) {
+  if (isOwner && family) {
     try {
-      invoices = await listCustomerInvoices(
-        getStripe(c.env),
-        family.stripe_customer_id,
-      );
+      const rows = await c.env.DB.prepare(
+        `SELECT id, invoice_number, issued_at, amount, currency, period_label
+         FROM manual_invoices
+         WHERE family_id = ? AND voided_at IS NULL
+         ORDER BY issued_at DESC, created_at DESC
+         LIMIT 100`,
+      )
+        .bind(family.id)
+        .all<{
+          id: string;
+          invoice_number: string;
+          issued_at: string;
+          amount: number;
+          currency: string;
+          period_label: string | null;
+        }>();
+      invoices = (rows.results ?? []).map((invoice) => ({
+        id: invoice.id,
+        number: invoice.invoice_number,
+        issuedAt: invoice.issued_at,
+        amount: invoice.amount,
+        currency: invoice.currency,
+        periodLabel: invoice.period_label,
+      }));
     } catch (err) {
       console.error("[web subscription invoices]", err);
       invoiceError = "A számlák most nem tölthetők be.";
@@ -909,6 +1007,122 @@ web.post("/account/portal", optionalAuth, async (c) => {
     return_url: `${publicBaseUrl(c.req.url, c.env)}/account/subscription`,
   });
   return c.redirect(portal.url);
+});
+
+web.get("/family-link/:token", optionalAuth, async (c) => {
+  const token = c.req.param("token");
+  const invite = await c.env.DB.prepare(
+    `SELECT i.target_email, i.status, i.expires_at,
+            f.name AS family_name, u.name AS inviter_name
+     FROM family_link_invites i
+     JOIN families f ON f.id = i.source_family_id
+     JOIN users u ON u.id = i.invited_by
+     WHERE i.token = ?`,
+  )
+    .bind(token)
+    .first<{
+      target_email: string;
+      status: string;
+      expires_at: string;
+      family_name: string;
+      inviter_name: string;
+    }>();
+  const user = c.get("user");
+  if (!invite || invite.status !== "pending" || isExpired(invite.expires_at)) {
+    return c.html(
+      familyConnectionPage({
+        familyName: "ismeretlen",
+        inviterName: "Ismeretlen",
+        token,
+        loggedIn: !!user,
+        error: "Ez a családi kapcsolat lejárt vagy már felhasználták.",
+      }),
+      404,
+    );
+  }
+  return c.html(
+    familyConnectionPage({
+      familyName: invite.family_name,
+      inviterName: invite.inviter_name,
+      token,
+      loggedIn: !!user,
+      error:
+        user && normalizeEmail(user.email) !== normalizeEmail(invite.target_email)
+          ? "Ez a kapcsolat másik email címre szól."
+          : undefined,
+    }),
+  );
+});
+
+web.post("/family-link/:token/accept", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect(`/login?connection=${encodeURIComponent(c.req.param("token"))}`);
+  const token = c.req.param("token");
+  const invite = await c.env.DB.prepare(
+    `SELECT i.id, i.source_family_id, i.target_email, i.status, i.expires_at,
+            f.name AS family_name, u.name AS inviter_name
+     FROM family_link_invites i
+     JOIN families f ON f.id = i.source_family_id
+     JOIN users u ON u.id = i.invited_by
+     WHERE i.token = ?`,
+  )
+    .bind(token)
+    .first<{
+      id: string;
+      source_family_id: string;
+      target_email: string;
+      status: string;
+      expires_at: string;
+      family_name: string;
+      inviter_name: string;
+    }>();
+  if (!invite || invite.status !== "pending" || isExpired(invite.expires_at)) {
+    return c.redirect(`/family-link/${encodeURIComponent(token)}`);
+  }
+  if (normalizeEmail(user.email) !== normalizeEmail(invite.target_email)) {
+    return c.html(
+      familyConnectionPage({
+        familyName: invite.family_name,
+        inviterName: invite.inviter_name,
+        token,
+        loggedIn: true,
+        error: "Ez a kapcsolat másik email címre szól.",
+      }),
+      403,
+    );
+  }
+  const target = await getUserFamily(c.env.DB, user.id);
+  if (!target || target.owner_id !== user.id) {
+    return c.html(
+      familyConnectionPage({
+        familyName: invite.family_name,
+        inviterName: invite.inviter_name,
+        token,
+        loggedIn: true,
+        error: "Csak egy család tulajdonosa fogadhatja el.",
+      }),
+      403,
+    );
+  }
+  const [familyA, familyB] =
+    invite.source_family_id < target.id
+      ? [invite.source_family_id, target.id]
+      : [target.id, invite.source_family_id];
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO family_connections
+       (id, family_a_id, family_b_id, status, created_by)
+       VALUES (?, ?, ?, 'active', ?)
+       ON CONFLICT(family_a_id, family_b_id)
+       DO UPDATE SET status = 'active', revoked_at = NULL`,
+    ).bind(id("fcon"), familyA, familyB, user.id),
+    c.env.DB.prepare(
+      `UPDATE family_link_invites
+       SET status = 'accepted', accepted_by = ?, accepted_at = datetime('now')
+       WHERE id = ?`,
+    ).bind(user.id, invite.id),
+  ]);
+  return c.redirect("/app?connection=accepted");
 });
 
 web.get("/invite/:token", optionalAuth, async (c) => {

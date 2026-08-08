@@ -16,7 +16,7 @@ function safeId(id: string): string {
 }
 
 const appCss = `
-body.bare { background: var(--bg); }
+body.bare { background: var(--bg); overflow: hidden; }
 .app-frame {
   min-height: 100dvh;
   min-height: 100svh;
@@ -25,6 +25,129 @@ body.bare { background: var(--bg); }
   background:
     radial-gradient(900px 420px at 0% 0%, #d9f2e6 0%, transparent 55%),
     var(--bg);
+}
+.workspace-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: 0;
+}
+.workspace-layout > .app-main {
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: rgba(247, 251, 248, .92);
+}
+.workspace-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 18px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.workspace-sidebar-head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.2rem;
+}
+.workspace-sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+.workspace-sidebar-list a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 8px;
+  border-radius: 14px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.workspace-sidebar-list a:hover,
+.workspace-sidebar-list a.active { background: var(--brand-soft); }
+.workspace-sidebar-list .sidebar-copy {
+  min-width: 0;
+  flex: 1;
+}
+.workspace-sidebar-list strong,
+.workspace-sidebar-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-sidebar-list small { color: var(--muted); margin-top: 3px; }
+.workspace-plus {
+  position: fixed;
+  left: 22px;
+  bottom: calc(22px + var(--safe-bottom));
+  z-index: 20;
+  width: 58px;
+  min-height: 58px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 1.7rem;
+  box-shadow: 0 10px 24px rgba(11, 110, 79, .22);
+}
+.workspace-plus-menu {
+  position: fixed;
+  left: 22px;
+  bottom: calc(90px + var(--safe-bottom));
+  z-index: 19;
+  display: grid;
+  gap: 6px;
+  width: min(250px, calc(100vw - 44px));
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.workspace-plus-menu[hidden] { display: none; }
+.workspace-plus-menu a {
+  display: block;
+  padding: 11px 12px;
+  border-radius: 11px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.workspace-plus-menu a:hover { background: var(--brand-soft); }
+.workspace-mobile-chats { display: none; }
+@media (max-width: 760px) {
+  .workspace-layout { display: block; }
+  .workspace-sidebar {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 15;
+    width: min(340px, 88vw);
+    transform: translateX(102%);
+    transition: transform 180ms ease;
+  }
+  .workspace-sidebar.open { transform: translateX(0); }
+  .workspace-mobile-chats {
+    display: inline-flex;
+    width: auto;
+    min-height: 42px;
+    margin: 0;
+    padding: 8px 12px;
+  }
+  .app-top-nav a:first-child { display: none; }
+  .workspace-layout > .app-main { min-height: 0; }
 }
 .app-top {
   display: flex;
@@ -409,10 +532,28 @@ function connectRealtime(onEvent) {
   let backoff = 1000;
   let closed = false;
   let pingTimer = null;
-  function open() {
+  async function open() {
     if (closed) return;
+    let ticket = '';
+    try {
+      const ticketRes = await fetch('/api/realtime/ticket', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-Client': 'web' }
+      });
+      if (ticketRes.status === 401) { closed = true; return; }
+      const ticketBody = await ticketRes.json();
+      ticket = String(ticketBody.ticket || '');
+      if (!ticket) throw new Error('realtime ticket missing');
+    } catch (_) {
+      if (!closed) {
+        setTimeout(open, backoff);
+        backoff = Math.min(backoff * 2, 30000);
+      }
+      return;
+    }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/api/realtime/ws');
+    ws = new WebSocket(proto + '//' + location.host + '/api/realtime/ws?ticket=' + encodeURIComponent(ticket));
     ws.onopen = () => {
       backoff = 1000;
       clearInterval(pingTimer);
@@ -443,10 +584,11 @@ function appShell(
   title: string,
   user: UserRow,
   body: string,
-  opts?: { fill?: boolean; hideNav?: boolean },
+  opts?: { fill?: boolean; hideNav?: boolean; activeId?: string },
 ): string {
   const fill = !!opts?.fill;
   const hideNav = !!opts?.hideNav;
+  const activeId = safeId(opts?.activeId ?? "");
   const avatarUrl = user.avatar_key
     ? `/api/users/${encodeURIComponent(user.id)}/avatar`
     : "";
@@ -472,12 +614,96 @@ function appShell(
           </span>
         </a>
         <nav class="app-top-nav">
+          <button class="workspace-mobile-chats ghost" id="mobileChatsBtn" type="button">Chatek</button>
           <a href="/app"><button class="secondary" type="button">Beszélgetések</button></a>
           <a href="/account"><button class="ghost" type="button">Beállítások</button></a>
         </nav>
       </header>`
       }
-      <main class="app-main${fill ? " fill" : ""}">${body}</main>
+      ${
+        hideNav
+          ? `<main class="app-main${fill ? " fill" : ""}">${body}</main>`
+          : `<div class="workspace-layout">
+          <main class="app-main${fill ? " fill" : ""}">${body}</main>
+          <aside class="workspace-sidebar" id="workspaceSidebar">
+            <div class="workspace-sidebar-head">
+              <h2>Chatek</h2>
+              <button class="workspace-mobile-chats ghost" id="closeChatsBtn" type="button">Bezárás</button>
+            </div>
+            <div class="workspace-sidebar-list" id="workspaceChatList">
+              <p class="hint">Betöltés…</p>
+            </div>
+          </aside>
+        </div>
+        <button class="workspace-plus" id="workspacePlus" type="button" aria-label="Új művelet">+</button>
+        <div class="workspace-plus-menu" id="workspacePlusMenu" hidden>
+          <a href="/account">Családtag meghívása</a>
+          <a href="/app?nearby=1">Közeli ismerősök</a>
+          <a href="/account/subscription">Csomag és számlázás</a>
+        </div>
+        <script>
+        ${clientHelpers}
+        (() => {
+          const activeId = ${JSON.stringify(activeId)};
+          const list = document.getElementById('workspaceChatList');
+          const sidebar = document.getElementById('workspaceSidebar');
+          const plus = document.getElementById('workspacePlus');
+          const menu = document.getElementById('workspacePlusMenu');
+          const mobileChats = document.getElementById('mobileChatsBtn');
+          const closeChats = document.getElementById('closeChatsBtn');
+          function toggleSidebar(open) { sidebar?.classList.toggle('open', open); }
+          mobileChats?.addEventListener('click', () => toggleSidebar(true));
+          closeChats?.addEventListener('click', () => toggleSidebar(false));
+          plus?.addEventListener('click', () => { menu.hidden = !menu.hidden; });
+          function renderChats(chats) {
+            list.replaceChildren();
+            if (!chats.length) {
+              list.innerHTML = '<p class="hint">Még nincs beszélgetés.</p>';
+              return;
+            }
+            for (const chat of chats) {
+              const id = String(chat.id || '');
+              if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) continue;
+              const link = document.createElement('a');
+              link.href = '/app/chat/' + encodeURIComponent(id);
+              if (id === activeId) link.classList.add('active');
+              const avatar = document.createElement(chat.avatarUrl ? 'img' : 'span');
+              avatar.className = 'web-avatar';
+              if (chat.avatarUrl) {
+                avatar.src = String(chat.avatarUrl);
+                avatar.alt = String(chat.name || 'Chat');
+              } else {
+                avatar.textContent = String(chat.name || 'C').trim().charAt(0).toUpperCase() || '?';
+              }
+              const copy = document.createElement('span');
+              copy.className = 'sidebar-copy';
+              const name = document.createElement('strong');
+              name.textContent = chat.name || 'Beszélgetés';
+              const hint = document.createElement('small');
+              hint.textContent = chat.lastSenderName ? chat.lastSenderName + ': hangüzenet' : '';
+              copy.append(name, hint);
+              link.append(avatar, copy);
+              list.append(link);
+            }
+          }
+          async function loadChats() {
+            try {
+              const data = await api('/api/conversations');
+              renderChats(data.conversations || []);
+            } catch (error) {
+              list.innerHTML = '<p class="error">' + String(error.message || 'Hiba') + '</p>';
+            }
+          }
+          loadChats();
+          connectRealtime((event) => {
+            if (event.type === 'message_created' ||
+                event.type === 'conversation_updated' ||
+                event.type === 'call_updated' ||
+                event.type === 'call_ended') loadChats();
+          });
+        })();
+        </script>`
+      }
     </div>
   `,
     { vision: !!user.vision_assist, variant: "bare" },
@@ -489,93 +715,14 @@ export function appInboxPage(user: UserRow): string {
     "Beszélgetések",
     user,
     `
-    <h1 class="app-title">Beszélgetések</h1>
-    <p class="app-sub">Hangüzenetek és hívások · ${escape(user.name)}</p>
-    <div class="inbox-panel">
-      <div id="status" class="hint">Betöltés…</div>
-      <ul class="chat-list" id="list"></ul>
-    </div>
-    <script>
-    ${clientHelpers}
-    function fmt(iso) {
-      if (!iso) return '';
-      try { return new Date(iso).toLocaleString('hu-HU', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
-      catch { return ''; }
-    }
-    let loading = false;
-    async function load() {
-      if (loading) return;
-      loading = true;
-      const status = document.getElementById('status');
-      const list = document.getElementById('list');
-      try {
-        const data = await api('/api/conversations');
-        const chats = data.conversations || [];
-        if (!chats.length) {
-          status.textContent = 'Még nincs beszélgetés. Nyisd meg az appot, vagy hívj meg valakit.';
-          list.replaceChildren();
-          return;
-        }
-        status.textContent = '';
-        list.replaceChildren();
-        for (const c of chats) {
-          const id = String(c.id || '');
-          if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) continue;
-          const li = document.createElement('li');
-          li.className = c.unreadCount > 0 ? 'unread' : '';
-          const a = document.createElement('a');
-          a.href = '/app/chat/' + encodeURIComponent(id);
-          const left = document.createElement('span');
-          left.className = 'chat-row-main';
-          const avatar = document.createElement(c.avatarUrl ? 'img' : 'span');
-          avatar.className = 'web-avatar';
-          if (c.avatarUrl) {
-            avatar.src = String(c.avatarUrl);
-            avatar.alt = String(c.name || 'Beszélgetés');
-          } else {
-            avatar.textContent = String(c.name || 'B').trim().charAt(0).toUpperCase() || '?';
-          }
-          left.appendChild(avatar);
-          const copy = document.createElement('span');
-          copy.className = 'chat-row-copy';
-          const strong = document.createElement('strong');
-          strong.textContent = c.name || 'Beszélgetés';
-          copy.appendChild(strong);
-          const hint = document.createElement('span');
-          hint.className = 'hint';
-          hint.textContent = c.lastSenderName ? (c.lastSenderName + ': hangüzenet') : '';
-          copy.appendChild(hint);
-          left.appendChild(copy);
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.appendChild(document.createTextNode(fmt(c.lastMessageAt)));
-          if (c.unreadCount > 0) {
-            meta.appendChild(document.createElement('br'));
-            const badge = document.createElement('span');
-            badge.className = 'badge';
-            badge.textContent = String(c.unreadCount);
-            meta.appendChild(badge);
-          }
-          a.appendChild(left);
-          a.appendChild(meta);
-          li.appendChild(a);
-          list.appendChild(li);
-        }
-      } catch (e) {
-        status.textContent = e.message || 'Betöltési hiba';
-      } finally {
-        loading = false;
-      }
-    }
-    load();
-    connectRealtime((ev) => {
-      if (ev.type === 'message_created' || ev.type === 'conversation_updated' ||
-          ev.type === 'incoming_call' || ev.type === 'call_ended' || ev.type === 'call_updated') {
-        load();
-      }
-    });
-    setInterval(load, 30000);
-    </script>
+    <section class="inbox-panel" style="height:100%;display:grid;place-items:center;text-align:center">
+      <div>
+        <div class="web-avatar" style="margin:0 auto 14px;font-size:2rem">Ü</div>
+        <h1 class="app-title">Válassz egy chatet</h1>
+        <p class="app-sub">A beszélgetéseid a jobb oldali sávban vannak.</p>
+        <p class="hint">Új művelethez használd a bal alsó + gombot.</p>
+      </div>
+    </section>
   `,
   );
 }
@@ -717,6 +864,9 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
       try {
         const data = await api('/api/messages/'+conversationId);
         const msgs = data.messages || [];
+        const stickToBottom =
+          !box.children.length ||
+          box.scrollHeight - box.scrollTop - box.clientHeight < 96;
         status.textContent = msgs.length ? '' : 'Még nincs hangüzenet.';
         box.replaceChildren();
         for (const m of msgs) {
@@ -775,6 +925,7 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
           div.appendChild(time);
           box.appendChild(div);
         }
+        if (stickToBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
       } catch (e) {
         status.textContent = e.message || 'Hiba';
       } finally {
@@ -891,9 +1042,9 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
       if (ev.type === 'message_created' && ev.conversationId === conversationId) loadMsgs();
       if (ev.type === 'call_updated' || ev.type === 'call_ended') loadMsgs();
     });
-    setInterval(loadMsgs, 30000);
     </script>
   `,
+    { activeId: id },
   );
 }
 

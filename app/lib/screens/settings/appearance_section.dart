@@ -3,10 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/providers.dart';
 import '../../providers/theme_provider.dart';
+import '../../services/api_client.dart';
+import '../../services/toast.dart';
 import '../../widgets/widgets.dart';
 
 class SettingsAppearanceSection extends ConsumerWidget {
   const SettingsAppearanceSection({super.key});
+
+  Future<void> _setVisionAssist(
+    BuildContext context,
+    WidgetRef ref,
+    bool value,
+  ) async {
+    try {
+      await ref.read(authProvider.notifier).setVisionAssist(value);
+    } on ApiException catch (e) {
+      if (context.mounted) showAppToast(context, e.message, error: true);
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -30,8 +44,7 @@ class SettingsAppearanceSection extends ConsumerWidget {
             contentPadding: EdgeInsets.zero,
             title: Text('Látássérült segítség', style: t.textTheme.titleLarge),
             value: vision,
-            onChanged: (v) =>
-                ref.read(authProvider.notifier).setVisionAssist(v),
+            onChanged: (v) => _setVisionAssist(context, ref, v),
           ),
         ),
       ],

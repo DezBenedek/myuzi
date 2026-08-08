@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../models/models.dart';
 import '../../services/api_client.dart';
+import '../../services/toast.dart';
 
 Future<void> showBillingInvoicesSheet(
   BuildContext context, {
@@ -22,8 +23,35 @@ class BillingInvoicesSheet extends StatelessWidget {
   final ApiClient api;
 
   String _date(BillingInvoice invoice) {
-    final d = invoice.created;
+    final d = invoice.issuedAt;
     return '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}.';
+  }
+
+  Future<void> _shareInvoice(
+    BuildContext context,
+    BillingInvoice invoice,
+  ) async {
+    try {
+      final bytes = await api.downloadInvoice(invoice);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            XFile.fromData(
+              bytes,
+              name: '${invoice.displayNumber}.pdf',
+              mimeType: 'application/pdf',
+            ),
+          ],
+          title: invoice.displayNumber,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (context.mounted) showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (context.mounted) {
+        showAppToast(context, 'A PDF letöltése sikertelen', error: true);
+      }
+    }
   }
 
   @override
@@ -39,7 +67,7 @@ class BillingInvoicesSheet extends StatelessWidget {
             Text('Számlák letöltése', style: t.textTheme.headlineMedium),
             const SizedBox(height: 8),
             Text(
-              'A Stripe által kiállított számlák PDF-ben tölthetők le.',
+              'A MyÜzi által feltöltött számlák PDF-ben letölthetők vagy megoszthatók.',
               style: t.textTheme.bodyMedium,
             ),
             const SizedBox(height: 14),
@@ -82,17 +110,14 @@ class BillingInvoicesSheet extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         title: Text(invoice.displayNumber),
                         subtitle: Text(
-                          '${_date(invoice)} · ${invoice.displayAmount}',
+                          '${_date(invoice)}${invoice.periodLabel == null ? '' : ' · ${invoice.periodLabel}'} · ${invoice.displayAmount}',
                         ),
                         trailing: IconButton(
-                          tooltip: 'PDF letöltése',
+                          tooltip: 'PDF megosztása',
                           icon: const Icon(Icons.download_outlined),
-                          onPressed: invoice.downloadUrl == null
+                          onPressed: invoice.downloadPath == null
                               ? null
-                              : () => launchUrl(
-                                  Uri.parse(invoice.downloadUrl!),
-                                  mode: LaunchMode.externalApplication,
-                                ),
+                              : () => _shareInvoice(context, invoice),
                         ),
                       );
                     },

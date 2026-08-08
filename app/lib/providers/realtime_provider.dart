@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import '../services/call_navigation.dart';
+import '../services/api_client.dart';
 import '../services/push_service.dart';
 import '../services/realtime_service.dart';
 
@@ -33,7 +34,17 @@ final realtimeLifecycleProvider = Provider<void>((ref) {
 
   realtime.connect(
     baseUrl: api.baseUrl,
-    ticketProvider: () => api.realtimeTicket(),
+    ticketProvider: () async {
+      try {
+        return await api.realtimeTicket();
+      } on ApiException catch (e) {
+        if (e.statusCode == 401) {
+          realtime.disconnect();
+          unawaited(ref.read(authProvider.notifier).invalidateSession());
+        }
+        rethrow;
+      }
+    },
   );
   unawaited(PushService.syncToken(api));
 });

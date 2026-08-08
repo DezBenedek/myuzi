@@ -37,7 +37,16 @@ class _SettingsSubscriptionSectionState
     if (!mounted) return;
     setState(() => _openingWeb = true);
     try {
-      final url = await ref.read(apiProvider).createWebAccountLink();
+      final api = ref.read(apiProvider);
+      final billing = await api.billingStatus();
+      if (billing.isOwner &&
+          (billing.billing == null || !billing.billing!.isComplete)) {
+        if (mounted) {
+          await showBillingDetailsSheet(context, api: api);
+        }
+        return;
+      }
+      final url = await api.createWebAccountLink();
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } on ApiException catch (e) {
       if (mounted) showAppToast(context, e.message, error: true);

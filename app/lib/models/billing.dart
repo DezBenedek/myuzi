@@ -43,58 +43,39 @@ class BillingInvoice {
   const BillingInvoice({
     required this.id,
     required this.number,
-    required this.created,
-    required this.amountPaid,
+    required this.issuedAt,
+    required this.amount,
     required this.currency,
-    required this.status,
-    required this.downloadUrl,
+    required this.periodLabel,
+    required this.downloadPath,
   });
 
   final String id;
   final String? number;
-  final DateTime created;
-  final int amountPaid;
+  final DateTime issuedAt;
+  final int amount;
   final String currency;
-  final String? status;
-  final String? downloadUrl;
+  final String? periodLabel;
+  final String? downloadPath;
 
   factory BillingInvoice.fromJson(Map<String, dynamic> json) {
-    final createdSeconds = (json['created'] as num?)?.toInt() ?? 0;
+    final issuedAt =
+        DateTime.tryParse(json['issuedAt'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0);
     return BillingInvoice(
       id: json['id'] as String? ?? '',
       number: json['number'] as String?,
-      created: DateTime.fromMillisecondsSinceEpoch(createdSeconds * 1000),
-      amountPaid: (json['amountPaid'] as num?)?.toInt() ?? 0,
+      issuedAt: issuedAt,
+      amount: (json['amount'] as num?)?.toInt() ?? 0,
       currency: json['currency'] as String? ?? 'huf',
-      status: json['status'] as String?,
-      downloadUrl: json['downloadUrl'] as String?,
+      periodLabel: json['periodLabel'] as String?,
+      downloadPath: json['downloadPath'] as String?,
     );
   }
 
   String get displayNumber => number?.isNotEmpty == true ? number! : id;
 
   String get displayAmount {
-    final zeroDecimal = {
-      'bif',
-      'clp',
-      'djf',
-      'gnf',
-      'jpy',
-      'kmf',
-      'krw',
-      'mga',
-      'pyg',
-      'rwf',
-      'ugx',
-      'vnd',
-      'vuv',
-      'xaf',
-      'xof',
-      'xpf',
-      'huf',
-    }.contains(currency.toLowerCase());
-    final amount = (zeroDecimal ? amountPaid : amountPaid / 100)
-        .toStringAsFixed(0);
     return '$amount ${currency.toUpperCase()}';
   }
 }

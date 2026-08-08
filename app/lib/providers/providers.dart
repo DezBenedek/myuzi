@@ -66,7 +66,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       // Stay logged in offline with last known profile while we validate.
       if (cached != null) {
-        state = AuthState(user: cached, loading: false);
+        // Keep the auth gate in validation mode until /me confirms the token.
+        // Otherwise realtime can start with a stale cached session and loop
+        // on 401 responses while the UI still looks logged in.
+        state = AuthState(user: cached, loading: true);
       }
 
       try {
@@ -157,9 +160,20 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> setVisionAssist(bool value) async {
-    final user = await _api.updateMe(visionAssist: value);
-    await LocalCache.saveUser(user);
-    state = state.copyWith(user: user);
+    try {
+      final user = await _api.updateMe(visionAssist: value);
+      await LocalCache.saveUser(user);
+      state = state.copyWith(user: user);
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) await invalidateSession();
+      rethrow;
+    }
+  }
+
+  Future<void> invalidateSession() async {
+    await _api.clearSession();
+    await LocalCache.clearUser();
+    state = const AuthState(loading: false);
   }
 
   Future<void> updateProfile({required String name, required String email}) async {

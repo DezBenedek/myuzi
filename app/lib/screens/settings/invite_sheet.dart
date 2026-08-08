@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../services/api_client.dart';
 import '../../services/toast.dart';
@@ -76,6 +77,34 @@ class _InviteSheetState extends State<InviteSheet> {
           ),
           if (_inviteUrl != null) ...[
             const SizedBox(height: 12),
+            Text(
+              'A meghívott ezt a QR-kódot is beolvashatja.',
+              style: t.textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: QrImageView(
+                data: _inviteUrl!,
+                size: (MediaQuery.sizeOf(context).width - 110).clamp(180.0, 250.0),
+                backgroundColor: Colors.white,
+                eyeStyle: const QrEyeStyle(
+                  eyeShape: QrEyeShape.square,
+                  color: Color(0xFF12261C),
+                ),
+                dataModuleStyle: const QrDataModuleStyle(
+                  dataModuleShape: QrDataModuleShape.square,
+                  color: Color(0xFF12261C),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             SelectableText(_inviteUrl!, style: t.textTheme.bodyMedium),
           ],
           const SizedBox(height: 16),

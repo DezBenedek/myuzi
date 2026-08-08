@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +9,7 @@ import '../../providers/connectivity_provider.dart';
 import '../../providers/providers.dart';
 import '../../services/api_client.dart';
 import '../../services/toast.dart';
+import '../widgets.dart';
 import 'qr_parse.dart';
 
 class QrScanScreen extends ConsumerStatefulWidget {
@@ -43,6 +46,31 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         .firstWhere((s) => s.trim().isNotEmpty, orElse: () => '');
     if (raw.isEmpty || raw == _lastRaw) return;
     _lastRaw = raw;
+
+    final familyInviteToken = parseFamilyInviteToken(raw);
+    if (familyInviteToken != null) {
+      setState(() => _handling = true);
+      try {
+        await _controller.stop();
+        await _handleFamilyInvite(familyInviteToken);
+      } on ApiException catch (e) {
+        _cooldownUntil = DateTime.now().add(const Duration(seconds: 2));
+        if (mounted) showAppToast(context, e.message, error: true);
+      } catch (_) {
+        _cooldownUntil = DateTime.now().add(const Duration(seconds: 2));
+        if (mounted) showAppToast(context, 'A családi meghívó nem fogadható el', error: true);
+      } finally {
+        _handling = false;
+        _lastRaw = null;
+        if (mounted) {
+          try {
+            await _controller.start();
+          } catch (_) {}
+          setState(() {});
+        }
+      }
+      return;
+    }
 
     final userId = parseQrUserId(raw);
     if (userId == null) {
@@ -108,6 +136,104 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         } catch (_) {}
         setState(() {});
       }
+    }
+  }
+
+  Future<void> _handleFamilyInvite(String token) async {
+    if (!ref.read(connectivityProvider)) {
+      throw ApiException('Nincs internet');
+    }
+    final data = await ref.read(apiProvider).getInvite(token);
+    final invite = Map<String, dynamic>.from(data['invite'] as Map? ?? {});
+    final familyName = invite['familyName'] as String? ?? 'család';
+    if (!mounted) return;
+
+    final wantsToJoin = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Családi meghívó', style: t.textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(
+                  'Csatlakozol a(z) $familyName családhoz?',
+                  style: t.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: 'Csatlakozom',
+                  icon: Icons.group_add_outlined,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (wantsToJoin != true || !mounted) return;
+
+    try {
+      await ref.read(apiProvider).acceptInvite(token);
+    } on ApiException catch (e) {
+      if (!e.needsLeaveConfirmation) rethrow;
+      if (!mounted) return;
+      final leave = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Kilépés a jelenlegi családból?',
+                  style: Theme.of(ctx).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(e.message),
+                const SizedBox(height: 16),
+                BigButton(
+                  label: 'Kilépek és csatlakozom',
+                  icon: Icons.logout,
+                  danger: true,
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+                const SizedBox(height: 8),
+                BigButton(
+                  label: 'Mégse',
+                  outlined: true,
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (leave != true) return;
+      await ref.read(apiProvider).acceptInvite(token, confirmLeave: true);
+    }
+
+    ref.invalidate(familyProvider);
+    unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
+    if (mounted) {
+      showAppToast(context, 'Csatlakoztál a családhoz');
+      Navigator.pop(context);
     }
   }
 

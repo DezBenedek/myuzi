@@ -331,10 +331,9 @@ calls.post("/start", async (c) => {
   const members = await c.env.DB.prepare(
     `SELECT cm.user_id
      FROM conversation_members cm
-     JOIN family_members fm ON fm.user_id = cm.user_id AND fm.family_id = ?
      WHERE cm.conversation_id = ?`,
   )
-    .bind(family.id, conversationId)
+    .bind(conversationId)
     .all<{ user_id: string }>();
   const participantIds = new Set((members.results ?? []).map((m) => m.user_id));
   if (participantIds.size > MAX_CALL_PARTICIPANTS) {
@@ -622,7 +621,7 @@ calls.get("/active", async (c) => {
     `SELECT c.id, c.family_id, c.conversation_id, c.room_name, c.call_type, c.initiated_by,
             c.status, c.created_at, c.answered_at, c.event_message_id
      FROM calls c
-     WHERE c.family_id = ? AND c.status IN ('ringing', 'active')
+     WHERE c.status IN ('ringing', 'active')
        AND c.created_at >= datetime('now', '-2 hours')
        AND EXISTS (
          SELECT 1 FROM conversation_members cm
@@ -631,7 +630,7 @@ calls.get("/active", async (c) => {
        )
      ORDER BY created_at DESC LIMIT 5`,
   )
-    .bind(family.id, c.get("userId"))
+    .bind(c.get("userId"))
     .all<Omit<CallRow, "mode">>();
 
   const callsOut = [];

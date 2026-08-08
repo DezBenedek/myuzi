@@ -12,6 +12,8 @@
 	<string>Hangüzenetekhez és hívásokhoz kell a mikrofon.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Videóhíváshoz és QR kód beolvasásához kell a kamera.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>A MyÜzi a névjegyzék email címei alapján ajánl ismerősöket.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Hívásokhoz helyi hálózati kapcsolat kell.</string>
 	<key>UIBackgroundModes</key>
