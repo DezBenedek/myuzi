@@ -3,7 +3,9 @@ import type { Env, Variables } from "../types";
 import { getFamily, getUserFamily, publicFamily } from "../lib/db";
 import {
   getStripe,
+  getCustomerInvoice,
   hasPaidPlan,
+  listCustomerInvoices,
   maxMembersForPlan,
   planFromPriceId,
   PLAN_FEATURES,
@@ -13,6 +15,71 @@ import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
 const billing = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+type BillingDetailsInput = {
+  billingType?: string;
+  billingName?: string;
+  taxId?: string;
+  addressLine1?: string;
+  city?: string;
+  postalCode?: string;
+  country?: string;
+};
+
+function publicBilling(family: {
+  billing_type?: string | null;
+  billing_name?: string | null;
+  billing_tax_id?: string | null;
+  billing_address_line1?: string | null;
+  billing_city?: string | null;
+  billing_postal_code?: string | null;
+  billing_country?: string | null;
+}) {
+  return {
+    billingType: family.billing_type ?? "individual",
+    billingName: family.billing_name ?? "",
+    taxId: family.billing_tax_id ?? "",
+    addressLine1: family.billing_address_line1 ?? "",
+    city: family.billing_city ?? "",
+    postalCode: family.billing_postal_code ?? "",
+    country: family.billing_country ?? "HU",
+  };
+}
+
+export function normalizeBillingDetails(body: BillingDetailsInput) {
+  const billingType = body.billingType === "company" ? "company" : "individual";
+  const billingName = String(body.billingName ?? "").trim().slice(0, 160);
+  const taxId = String(body.taxId ?? "").trim().slice(0, 80);
+  const addressLine1 = String(body.addressLine1 ?? "").trim().slice(0, 200);
+  const city = String(body.city ?? "").trim().slice(0, 100);
+  const postalCode = String(body.postalCode ?? "").trim().slice(0, 20);
+  const country = String(body.country ?? "HU").trim().toUpperCase().slice(0, 2) || "HU";
+
+  if (
+    billingName.length < 2 ||
+    !addressLine1 ||
+    !city ||
+    !postalCode ||
+    !/^[A-Z]{2}$/.test(country)
+  ) {
+    return { error: "Töltsd ki a számlázási adatokat." as const };
+  }
+  if (billingType === "company" && taxId.length < 5) {
+    return { error: "Cégnél adószám is kell." as const };
+  }
+
+  return {
+    value: {
+      billing_type: billingType,
+      billing_name: billingName,
+      billing_tax_id: taxId || null,
+      billing_address_line1: addressLine1,
+      billing_city: city,
+      billing_postal_code: postalCode,
+      billing_country: country,
+    },
+  };
+}
 
 billing.get("/plans", (c) => {
   return c.json({
@@ -28,6 +95,106 @@ billing.get("/plans", (c) => {
       },
     ],
   });
+});
+
+billing.get("/status", requireAuth, async (c) => {
+  const family = await getUserFamily(c.env.DB, c.get("userId"));
+  if (!family) {
+    return c.json({
+      family: null,
+      isOwner: false,
+      billing: null,
+      plans: [PLAN_FEATURES.free, PLAN_FEATURES.family, PLAN_FEATURES.family_plus],
+    });
+  }
+
+  const isOwner = family.owner_id === c.get("userId");
+  return c.json({
+    family: publicFamily(family),
+    isOwner,
+    billing: isOwner ? publicBilling(family) : null,
+    plans: [PLAN_FEATURES.free, PLAN_FEATURES.family, PLAN_FEATURES.family_plus],
+  });
+});
+
+billing.patch("/details", requireAuth, async (c) => {
+  const family = await getUserFamily(c.env.DB, c.get("userId"));
+  if (!family) return c.json({ error: "Nincs család" }, 400);
+  if (family.owner_id !== c.get("userId")) {
+    return c.json({ error: "Csak a család tulajdonosa módosíthatja" }, 403);
+  }
+
+  const body = await readLimitedJson<BillingDetailsInput>(c.req.raw);
+  const normalized = normalizeBillingDetails(body ?? {});
+  if ("error" in normalized) return c.json({ error: normalized.error }, 400);
+
+  const details = normalized.value;
+  await c.env.DB.prepare(
+    `UPDATE families SET
+      billing_type = ?, billing_name = ?, billing_tax_id = ?,
+      billing_address_line1 = ?, billing_city = ?, billing_postal_code = ?,
+      billing_country = ?, updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(
+      details.billing_type,
+      details.billing_name,
+      details.billing_tax_id,
+      details.billing_address_line1,
+      details.billing_city,
+      details.billing_postal_code,
+      details.billing_country,
+      family.id,
+    )
+    .run();
+
+  return c.json({ billing: publicBilling(details) });
+});
+
+billing.get("/invoices", requireAuth, async (c) => {
+  const family = await getUserFamily(c.env.DB, c.get("userId"));
+  if (!family) return c.json({ invoices: [] });
+  if (family.owner_id !== c.get("userId")) {
+    return c.json({ error: "Csak a család tulajdonosa láthatja a számlákat" }, 403);
+  }
+  if (!family.stripe_customer_id) return c.json({ invoices: [] });
+
+  try {
+    const invoices = await listCustomerInvoices(
+      getStripe(c.env),
+      family.stripe_customer_id,
+    );
+    return c.json({ invoices });
+  } catch (err) {
+    console.error("[billing invoices]", err);
+    return c.json({ error: "A számlák betöltése sikertelen" }, 502);
+  }
+});
+
+billing.get("/invoices/:id/download", requireAuth, async (c) => {
+  const invoiceId = c.req.param("id");
+  if (!/^in_[A-Za-z0-9]+$/.test(invoiceId)) {
+    return c.json({ error: "Érvénytelen számla" }, 400);
+  }
+
+  const family = await getUserFamily(c.env.DB, c.get("userId"));
+  if (!family?.stripe_customer_id || family.owner_id !== c.get("userId")) {
+    return c.json({ error: "Nincs jogosultság" }, 403);
+  }
+
+  try {
+    const invoice = await getCustomerInvoice(
+      getStripe(c.env),
+      family.stripe_customer_id,
+      invoiceId,
+    );
+    const url = invoice?.invoice_pdf ?? invoice?.hosted_invoice_url;
+    if (!url) return c.json({ error: "Ehhez a számlához nincs PDF" }, 404);
+    return c.redirect(url);
+  } catch (err) {
+    console.error("[billing invoice download]", err);
+    return c.json({ error: "A számla nem tölthető le" }, 502);
+  }
 });
 
 billing.post("/checkout", requireAuth, async (c) => {
@@ -202,16 +369,6 @@ billing.post("/webhook", async (c) => {
   }
 
   return c.json({ received: true });
-});
-
-billing.get("/status", requireAuth, async (c) => {
-  const family = await getUserFamily(c.env.DB, c.get("userId"));
-  if (!family) return c.json({ family: null });
-  return c.json({
-    family: publicFamily(family),
-    isOwner: family.owner_id === c.get("userId"),
-    plans: [PLAN_FEATURES.free, PLAN_FEATURES.family, PLAN_FEATURES.family_plus],
-  });
 });
 
 export async function applyPlan(

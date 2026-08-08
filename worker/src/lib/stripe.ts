@@ -193,6 +193,50 @@ export function planSummary(plan: string): string {
   return "Ingyenes · max 3 fő · 2 perc hang · nincs hívás";
 }
 
+export type InvoiceSummary = {
+  id: string;
+  number: string | null;
+  created: number;
+  amountPaid: number;
+  currency: string;
+  status: string | null;
+  downloadUrl: string | null;
+};
+
+function invoiceCustomerId(invoice: Stripe.Invoice): string | null {
+  if (typeof invoice.customer === "string") return invoice.customer;
+  return invoice.customer?.id ?? null;
+}
+
+export async function listCustomerInvoices(
+  stripe: Stripe,
+  customerId: string,
+): Promise<InvoiceSummary[]> {
+  const result = await stripe.invoices.list({
+    customer: customerId,
+    limit: 25,
+  });
+
+  return result.data.map((invoice) => ({
+    id: invoice.id,
+    number: invoice.number ?? null,
+    created: invoice.created,
+    amountPaid: invoice.amount_paid,
+    currency: invoice.currency,
+    status: invoice.status,
+    downloadUrl: invoice.invoice_pdf ?? invoice.hosted_invoice_url ?? null,
+  }));
+}
+
+export async function getCustomerInvoice(
+  stripe: Stripe,
+  customerId: string,
+  invoiceId: string,
+): Promise<Stripe.Invoice | null> {
+  const invoice = await stripe.invoices.retrieve(invoiceId);
+  return invoiceCustomerId(invoice) === customerId ? invoice : null;
+}
+
 export const PLAN_PRICES_HUF = {
   family: 1990,
   family_plus: 4990,

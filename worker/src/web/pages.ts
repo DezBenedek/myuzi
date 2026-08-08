@@ -1,4 +1,5 @@
 import type { UserRow } from "../types";
+import type { InvoiceSummary } from "../lib/stripe";
 
 const css = `
 :root {
@@ -14,8 +15,8 @@ const css = `
   --danger: #b42318;
   --ok: #0b6e4f;
   --radius: 16px;
-  --font: "Manrope", sans-serif;
-  --display: "Bricolage Grotesque", "Manrope", sans-serif;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --display: "Segoe UI", system-ui, -apple-system, sans-serif;
   --shadow-soft: 0 18px 40px rgba(18, 38, 28, 0.08);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -341,6 +342,227 @@ input, select, textarea {
   display: flex; flex-direction: column; align-items: center; gap: 16px;
   padding: 28px 16px; text-align: center;
 }
+.billing-portal {
+  min-height: 100dvh;
+  background:
+    radial-gradient(900px 420px at 0% 0%, #d9f2e6 0%, transparent 55%),
+    var(--bg);
+}
+.billing-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(860px, 100%);
+  margin: 0 auto;
+  padding: calc(18px + var(--safe-top)) 18px 12px;
+}
+.billing-top .logo {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+.billing-top .context {
+  color: var(--muted);
+  font-size: .9rem;
+  font-weight: 700;
+}
+.billing-main {
+  width: min(860px, 100%);
+  margin: 0 auto;
+  padding: 28px 18px calc(44px + var(--safe-bottom));
+}
+.billing-heading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.billing-avatar {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--brand-soft);
+  color: var(--brand);
+  display: grid;
+  place-items: center;
+  font-family: var(--display);
+  font-size: 2rem;
+  font-weight: 800;
+}
+.billing-heading h1 {
+  font-family: var(--display);
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  letter-spacing: -0.04em;
+  margin: 0;
+}
+.billing-heading p {
+  color: var(--muted);
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+.billing-family {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.billing-family strong { display: block; font-size: 1.05rem; }
+.billing-family span { color: var(--muted); font-size: .9rem; }
+.billing-actions { display: grid; gap: 10px; }
+.billing-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 68px;
+  padding: 13px 16px;
+  margin: 0;
+  text-align: left;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+.billing-action:hover {
+  transform: translateY(-2px);
+  border-color: var(--brand);
+  background: #fbfefc;
+}
+.billing-action:active { transform: scale(.985); }
+.billing-action .action-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 1.35rem;
+}
+.billing-action .action-copy { flex: 1; }
+.billing-action strong { display: block; font-size: 1rem; }
+.billing-action small { display: block; color: var(--muted); margin-top: 2px; }
+.billing-action .chevron { color: var(--muted); font-size: 1.3rem; }
+.billing-stripe {
+  margin-top: 22px;
+  text-align: center;
+}
+.billing-stripe form { display: inline-block; }
+.billing-stripe button {
+  width: auto;
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: .9rem;
+}
+.billing-note {
+  margin: 18px 0 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: .9rem;
+}
+.billing-alert {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 13px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-weight: 700;
+}
+.billing-alert.error { background: #fbe9e7; color: var(--danger); }
+dialog.billing-dialog {
+  width: min(560px, calc(100% - 28px));
+  max-height: min(760px, calc(100dvh - 28px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 24px 80px rgba(18, 38, 28, .22);
+  animation: dialogIn 220ms ease-out both;
+}
+dialog.billing-dialog::backdrop {
+  background: rgba(7, 20, 14, .48);
+  backdrop-filter: blur(3px);
+}
+.dialog-inner { padding: 22px; }
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.dialog-head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+}
+.dialog-close {
+  width: 42px;
+  min-height: 42px;
+  padding: 0;
+  margin: 0;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 1.35rem;
+}
+.dialog-actions { display: flex; gap: 10px; margin-top: 18px; }
+.dialog-actions button { flex: 1; margin: 0; }
+.plan-options { display: grid; gap: 10px; }
+.plan-option {
+  display: block;
+  padding: 16px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.plan-option:hover { border-color: var(--brand); transform: translateY(-1px); }
+.plan-option.current { border-color: var(--brand); background: var(--brand-soft); }
+.plan-option strong { display: block; font-size: 1.15rem; }
+.plan-option .price { color: var(--brand); font-weight: 800; margin: 4px 0; }
+.plan-option .features { color: var(--muted); font-size: .9rem; }
+.invoice-list { display: grid; gap: 8px; }
+.invoice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.invoice-row:last-child { border-bottom: 0; }
+.invoice-row strong { display: block; }
+.invoice-row small { color: var(--muted); }
+.invoice-row a {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border-radius: 11px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: .85rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+@keyframes dialogIn {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 
 @media (max-width: 860px) {
   .auth-screen { grid-template-columns: 1fr; }
@@ -362,6 +584,13 @@ input, select, textarea {
   .page-body { padding: 22px 14px calc(32px + var(--safe-bottom)); }
   button, input, select { min-height: 52px; }
   .cta-row .btn { width: 100%; }
+  .billing-main { padding: 22px 14px calc(32px + var(--safe-bottom)); }
+  .billing-heading { grid-template-columns: 64px 1fr; gap: 12px; }
+  .billing-avatar { width: 64px; height: 64px; font-size: 1.65rem; }
+  .billing-family { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .dialog-inner { padding: 18px; }
+  .dialog-actions { flex-direction: column; }
+  .invoice-row { align-items: flex-start; flex-direction: column; }
 }
 `;
 
@@ -398,9 +627,6 @@ export function layout(title: string, body: string, visionOrOpts: boolean | Layo
   <meta name="referrer" content="no-referrer" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https: wss:; media-src 'self' blob:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" />
   <title>${safeTitle} · MyÜzi</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>${css}${visionCss}</style>
 </head>
 <body class="${bodyClass}">
@@ -908,6 +1134,270 @@ export function billingPage(opts: {
   `,
       { userName: user.name },
     ),
+    { vision: !!user.vision_assist, variant: "page" },
+  );
+}
+
+export function subscriptionPortalPage(opts: {
+  user: UserRow;
+  family: {
+    id: string;
+    name: string;
+    plan: string;
+    owner_id: string;
+    stripe_status: string | null;
+    stripe_customer_id: string | null;
+  } | null;
+  billing: {
+    billing_type?: string | null;
+    billing_name?: string | null;
+    billing_tax_id?: string | null;
+    billing_address_line1?: string | null;
+    billing_city?: string | null;
+    billing_postal_code?: string | null;
+    billing_country?: string | null;
+  } | null;
+  invoices: InvoiceSummary[];
+  isOwner: boolean;
+  message?: string;
+  error?: string;
+}): string {
+  const { user, family, billing, invoices, isOwner, message, error } = opts;
+  const avatarUrl = user.avatar_key
+    ? `/api/users/${encodeURIComponent(user.id)}/avatar`
+    : "";
+  const initial = escape(user.name.trim().charAt(0).toUpperCase() || "?");
+  const planLabel =
+    family?.plan === "family_plus"
+      ? "Család+"
+      : family?.plan === "family"
+        ? "Család"
+        : "Ingyenes";
+  const planSummary =
+    family?.plan === "family_plus"
+      ? "25 tag · 20 perc hangüzenet · hang- és videóhívás"
+      : family?.plan === "family"
+        ? "6 tag · 10 perc hangüzenet · hang- és videóhívás"
+        : "3 tag · 2 perc hangüzenet";
+  const isCompany = billing?.billing_type === "company";
+  const billingName = billing?.billing_name ?? "";
+  const taxId = billing?.billing_tax_id ?? "";
+  const address = billing?.billing_address_line1 ?? "";
+  const city = billing?.billing_city ?? "";
+  const postalCode = billing?.billing_postal_code ?? "";
+  const country = billing?.billing_country ?? "HU";
+  const billingComplete =
+    billingName.trim().length >= 2 &&
+    address.trim().length > 0 &&
+    city.trim().length > 0 &&
+    postalCode.trim().length > 0 &&
+    (!isCompany || taxId.trim().length >= 5);
+  const hiddenBilling = `
+    <input type="hidden" name="billingType" value="${isCompany ? "company" : "individual"}" />
+    <input type="hidden" name="billingName" value="${escape(billingName)}" />
+    <input type="hidden" name="taxId" value="${escape(taxId)}" />
+    <input type="hidden" name="addressLine1" value="${escape(address)}" />
+    <input type="hidden" name="city" value="${escape(city)}" />
+    <input type="hidden" name="postalCode" value="${escape(postalCode)}" />
+    <input type="hidden" name="country" value="${escape(country)}" />`;
+  const invoiceRows = invoices.length
+    ? invoices
+        .map((invoice) => {
+          const date = new Date(invoice.created * 1000).toLocaleDateString("hu-HU");
+          const zeroDecimal = new Set([
+            "bif", "clp", "djf", "gnf", "huf", "jpy", "kmf", "krw",
+            "mga", "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf",
+          ]);
+          const amountValue = zeroDecimal.has(invoice.currency.toLowerCase())
+            ? invoice.amountPaid
+            : invoice.amountPaid / 100;
+          const amount = `${amountValue.toLocaleString("hu-HU")} ${invoice.currency.toUpperCase()}`;
+          const number = invoice.number || invoice.id;
+          return `<div class="invoice-row">
+            <span><strong>${escape(number)}</strong><small>${escape(date)} · ${escape(invoice.status || "számla")} · ${escape(amount)}</small></span>
+            <a href="/api/billing/invoices/${encodeURIComponent(invoice.id)}/download">PDF</a>
+          </div>`;
+        })
+        .join("")
+    : `<p class="hint">Még nincs letölthető számlád.</p>`;
+  const accountMessage = message
+    ? `<p class="billing-alert">${escape(message)}</p>`
+    : "";
+  const accountError = error
+    ? `<p class="billing-alert error">${escape(error)}</p>`
+    : "";
+
+  return layout(
+    "Csomag módosítása",
+    `
+    <div class="billing-portal">
+      <header class="billing-top">
+        <a class="logo" href="/">MyÜzi</a>
+        <span class="context">Fiókkezelés</span>
+      </header>
+      <main class="billing-main">
+        ${accountMessage}
+        ${accountError}
+        <section class="billing-heading">
+          ${
+            avatarUrl
+              ? `<img class="billing-avatar" src="${escape(avatarUrl)}" alt="${escape(user.name)}" />`
+              : `<span class="billing-avatar" aria-hidden="true">${initial}</span>`
+          }
+          <div>
+            <h1>Csomag módosítása</h1>
+            <p><strong>${escape(user.name)}</strong><br/>${escape(user.email)}</p>
+          </div>
+        </section>
+        ${
+          family
+            ? `<section class="billing-family">
+                <div><strong>${escape(family.name)}</strong><span>Család</span></div>
+                <div><strong>${escape(planLabel)}</strong><span>${escape(planSummary)}</span></div>
+              </section>`
+            : `<section class="billing-family"><div><strong>Nincs család</strong><span>Előbb hozz létre vagy fogadj el egy családi meghívót.</span></div></section>`
+        }
+        <section class="billing-actions" aria-label="Fiókkezelési lehetőségek">
+          <button class="billing-action" type="button" data-dialog="plansDialog" ${family && isOwner ? "" : "disabled"}>
+            <span class="action-icon">↕</span>
+            <span class="action-copy"><strong>Csomag módosítása</strong><small>${isOwner ? "Válassz a Család és Család+ csomagok közül" : "Csak a család tulajdonosa módosíthatja"}</small></span>
+            <span class="chevron">›</span>
+          </button>
+          <button class="billing-action" type="button" data-dialog="detailsDialog" ${family && isOwner ? "" : "disabled"}>
+            <span class="action-icon">⌂</span>
+            <span class="action-copy"><strong>Számlázási adatok</strong><small>${billingComplete ? "Mentett adatok módosítása" : "Add meg a számlázási adataidat"}</small></span>
+            <span class="chevron">›</span>
+          </button>
+          <button class="billing-action" type="button" data-dialog="invoicesDialog" ${family && isOwner ? "" : "disabled"}>
+            <span class="action-icon">↓</span>
+            <span class="action-copy"><strong>Számlák letöltése</strong><small>${invoices.length ? `${invoices.length} számla elérhető` : "Korábbi számlák PDF-ben"}</small></span>
+            <span class="chevron">›</span>
+          </button>
+        </section>
+        ${
+          family && isOwner && !!family.stripe_customer_id
+            ? `<div class="billing-stripe">
+                <form method="POST" action="/account/portal">
+                  <button class="ghost" type="submit">Stripe portál megnyitása</button>
+                </form>
+              </div>`
+            : ""
+        }
+        <p class="billing-note">A MyÜzi portálon a legfontosabb beállításokat egyszerűen kezelheted.</p>
+      </main>
+
+      <dialog class="billing-dialog" id="detailsDialog">
+        <div class="dialog-inner">
+          <div class="dialog-head">
+            <h2>Számlázási adatok</h2>
+            <button class="dialog-close" type="button" data-close="detailsDialog" aria-label="Bezárás">×</button>
+          </div>
+          <form method="POST" action="/account/subscription/billing">
+            <label for="portalBillingType">Számlázás</label>
+            <select id="portalBillingType" name="billingType">
+              <option value="individual" ${!isCompany ? "selected" : ""}>Magánszemély</option>
+              <option value="company" ${isCompany ? "selected" : ""}>Cég</option>
+            </select>
+            <label for="portalBillingName">Számlázási név</label>
+            <input id="portalBillingName" name="billingName" required minlength="2" value="${escape(billingName)}" />
+            <div id="portalCompanyFields" style="display:${isCompany ? "block" : "none"}">
+              <label for="portalTaxId">Adószám</label>
+              <input id="portalTaxId" name="taxId" value="${escape(taxId)}" />
+            </div>
+            <label for="portalAddress">Cím</label>
+            <input id="portalAddress" name="addressLine1" required value="${escape(address)}" />
+            <div class="row">
+              <div>
+                <label for="portalPostalCode">Irányítószám</label>
+                <input id="portalPostalCode" name="postalCode" required value="${escape(postalCode)}" />
+              </div>
+              <div>
+                <label for="portalCity">Város</label>
+                <input id="portalCity" name="city" required value="${escape(city)}" />
+              </div>
+            </div>
+            <input type="hidden" name="country" value="${escape(country)}" />
+            <div class="dialog-actions">
+              <button class="ghost" type="button" data-close="detailsDialog">Mégse</button>
+              <button type="submit">Mentés</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+
+      <dialog class="billing-dialog" id="plansDialog">
+        <div class="dialog-inner">
+          <div class="dialog-head">
+            <h2>Csomag módosítása</h2>
+            <button class="dialog-close" type="button" data-close="plansDialog" aria-label="Bezárás">×</button>
+          </div>
+          ${
+            billingComplete
+              ? ""
+              : `<p class="billing-alert">A csomagváltás előtt töltsd ki a számlázási adatokat.</p>`
+          }
+          <div class="plan-options">
+            <form method="POST" action="/account/checkout">
+              <input type="hidden" name="plan" value="family" />
+              ${hiddenBilling}
+              <button class="plan-option ${family?.plan === "family" ? "current" : ""}" type="submit" ${billingComplete ? "" : "disabled"}>
+                <strong>Család</strong>
+                <div class="price">1 990 Ft / hó</div>
+                <div class="features">6 tag · 10 perc hangüzenet · hívások és csoportok</div>
+              </button>
+            </form>
+            <form method="POST" action="/account/checkout">
+              <input type="hidden" name="plan" value="family_plus" />
+              ${hiddenBilling}
+              <button class="plan-option ${family?.plan === "family_plus" ? "current" : ""}" type="submit" ${billingComplete ? "" : "disabled"}>
+                <strong>Család+</strong>
+                <div class="price">4 990 Ft / hó</div>
+                <div class="features">25 tag · 20 perc hangüzenet · hívások és csoportok</div>
+              </button>
+            </form>
+          </div>
+          <div class="dialog-actions">
+            <button class="ghost" type="button" data-close="plansDialog">Mégse</button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog class="billing-dialog" id="invoicesDialog">
+        <div class="dialog-inner">
+          <div class="dialog-head">
+            <h2>Számlák letöltése</h2>
+            <button class="dialog-close" type="button" data-close="invoicesDialog" aria-label="Bezárás">×</button>
+          </div>
+          <div class="invoice-list">${invoiceRows}</div>
+        </div>
+      </dialog>
+      <script>
+      (() => {
+        document.querySelectorAll('[data-dialog]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const dialog = document.getElementById(button.dataset.dialog);
+            if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+          });
+        });
+        document.querySelectorAll('[data-close]').forEach((button) => {
+          button.addEventListener('click', () => {
+            document.getElementById(button.dataset.close)?.close();
+          });
+        });
+        const type = document.getElementById('portalBillingType');
+        const company = document.getElementById('portalCompanyFields');
+        type?.addEventListener('change', () => {
+          company.style.display = type.value === 'company' ? 'block' : 'none';
+        });
+        document.querySelectorAll('dialog.billing-dialog').forEach((dialog) => {
+          dialog.addEventListener('click', (event) => {
+            if (event.target === dialog) dialog.close();
+          });
+        });
+      })();
+      </script>
+    </div>
+  `,
     { vision: !!user.vision_assist, variant: "page" },
   );
 }

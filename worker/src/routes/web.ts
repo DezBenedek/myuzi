@@ -26,8 +26,14 @@ import {
   removeFamilyMember,
 } from "../lib/db";
 import { inviteEmail, loginCodeEmail, sendEmail } from "../lib/email";
-import { getStripe, changePaidPlan, cancelAtPeriodEnd, resumeSubscription } from "../lib/stripe";
-import { applyPlan } from "./billing";
+import {
+  getStripe,
+  changePaidPlan,
+  cancelAtPeriodEnd,
+  listCustomerInvoices,
+  resumeSubscription,
+} from "../lib/stripe";
+import { applyPlan, normalizeBillingDetails } from "./billing";
 import { publicBaseUrl } from "../lib/urls";
 import { optionalAuth } from "../middleware/auth";
 import {
@@ -38,6 +44,7 @@ import {
   landingPage,
   loginPage,
   plansPage,
+  subscriptionPortalPage,
   verifyPage,
 } from "../web/pages";
 import { appCallPage, appChatPage, appInboxPage, userQrPage } from "../web/app_pages";
@@ -275,7 +282,7 @@ web.get("/auth/bridge", async (c) => {
     "Set-Cookie",
     `myuzi_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${60 * 60 * 24 * 60}`,
   );
-  return c.redirect("/account");
+  return c.redirect("/account/subscription");
 });
 
 web.post("/login", async (c) => {
@@ -444,6 +451,101 @@ web.get("/account", optionalAuth, async (c) => {
               : undefined;
 
   return c.html(accountPage({ user, family, members, message }));
+});
+
+web.get("/account/subscription", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+
+  const family = await getUserFamily(c.env.DB, user.id);
+  const isOwner = !!family && family.owner_id === user.id;
+  let invoices: Awaited<ReturnType<typeof listCustomerInvoices>> = [];
+  let invoiceError: string | undefined;
+  if (isOwner && family?.stripe_customer_id) {
+    try {
+      invoices = await listCustomerInvoices(
+        getStripe(c.env),
+        family.stripe_customer_id,
+      );
+    } catch (err) {
+      console.error("[web subscription invoices]", err);
+      invoiceError = "A számlák most nem tölthetők be.";
+    }
+  }
+
+  const billing = c.req.query("billing");
+  const message =
+    billing === "saved"
+      ? "A számlázási adatok elmentve."
+      : billing === "success"
+        ? "Sikeres csomagváltás — köszönjük!"
+        : billing === "scheduled"
+          ? "A csomagváltás a jelenlegi hónap végén lép életbe."
+          : billing === "canceled"
+            ? "Az előfizetés lemondva — a hónap végéig még érvényes."
+            : billing === "resumed"
+              ? "Az előfizetés folytatódik."
+              : undefined;
+
+  return c.html(
+    subscriptionPortalPage({
+      user,
+      family,
+      billing: family,
+      invoices,
+      isOwner,
+      message,
+      error: c.req.query("error") || invoiceError,
+    }),
+  );
+});
+
+web.post("/account/subscription/billing", optionalAuth, async (c) => {
+  const user = c.get("user");
+  if (!user) return c.redirect("/login");
+
+  const family = await getUserFamily(c.env.DB, user.id);
+  if (!family || family.owner_id !== user.id) {
+    return c.redirect("/account/subscription?error=Nincs jogosultság");
+  }
+
+  const form = await c.req.parseBody();
+  const normalized = normalizeBillingDetails({
+    billingType: String(form.billingType ?? ""),
+    billingName: String(form.billingName ?? ""),
+    taxId: String(form.taxId ?? ""),
+    addressLine1: String(form.addressLine1 ?? ""),
+    city: String(form.city ?? ""),
+    postalCode: String(form.postalCode ?? ""),
+    country: String(form.country ?? "HU"),
+  });
+  if ("error" in normalized) {
+    return c.redirect(
+      `/account/subscription?error=${encodeURIComponent(normalized.error ?? "Érvénytelen számlázási adatok")}`,
+    );
+  }
+
+  const details = normalized.value;
+  await c.env.DB.prepare(
+    `UPDATE families SET
+      billing_type = ?, billing_name = ?, billing_tax_id = ?,
+      billing_address_line1 = ?, billing_city = ?, billing_postal_code = ?,
+      billing_country = ?, updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(
+      details.billing_type,
+      details.billing_name,
+      details.billing_tax_id,
+      details.billing_address_line1,
+      details.billing_city,
+      details.billing_postal_code,
+      details.billing_country,
+      family.id,
+    )
+    .run();
+
+  return c.redirect("/account/subscription?billing=saved");
 });
 
 web.post("/account/family", optionalAuth, async (c) => {
@@ -673,7 +775,7 @@ web.post("/account/checkout", optionalAuth, async (c) => {
     // Already subscribed → change plan (upgrade now / downgrade at period end).
     if (family.stripe_subscription_id && hasPaidPlan(family.plan)) {
       if (family.plan === plan) {
-        return c.redirect("/account?billing=success");
+        return c.redirect("/account/subscription?billing=success");
       }
       const result = await changePaidPlan(stripe, c.env, {
         subscriptionId: family.stripe_subscription_id,
@@ -687,14 +789,14 @@ web.post("/account/checkout", optionalAuth, async (c) => {
           customerId: family.stripe_customer_id,
           status: "active",
         });
-        return c.redirect("/account?billing=success");
+        return c.redirect("/account/subscription?billing=success");
       }
       await c.env.DB.prepare(
         `UPDATE families SET stripe_status = ?, updated_at = datetime('now') WHERE id = ?`,
       )
         .bind(`pending:${plan}`, family.id)
         .run();
-      return c.redirect("/account?billing=scheduled");
+      return c.redirect("/account/subscription?billing=scheduled");
     }
 
     let customerId = family.stripe_customer_id;
@@ -721,8 +823,8 @@ web.post("/account/checkout", optionalAuth, async (c) => {
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${base}/account?billing=success`,
-      cancel_url: `${base}/account/billing?plan=${plan}`,
+      success_url: `${base}/account/subscription?billing=success`,
+      cancel_url: `${base}/account/subscription?billing=cancel`,
       metadata: {
         familyId: family.id,
         plan,
@@ -765,7 +867,7 @@ web.post("/account/cancel-subscription", optionalAuth, async (c) => {
     )
       .bind(family.id)
       .run();
-    return c.redirect("/account?billing=canceled");
+    return c.redirect("/account/subscription?billing=canceled");
   } catch (err) {
     console.error("[cancel-subscription]", err);
     return c.redirect("/account");
@@ -787,7 +889,7 @@ web.post("/account/resume-subscription", optionalAuth, async (c) => {
     )
       .bind(family.id)
       .run();
-    return c.redirect("/account?billing=resumed");
+    return c.redirect("/account/subscription?billing=resumed");
   } catch (err) {
     console.error("[resume-subscription]", err);
     return c.redirect("/account");
@@ -804,7 +906,7 @@ web.post("/account/portal", optionalAuth, async (c) => {
   const stripe = getStripe(c.env);
   const portal = await stripe.billingPortal.sessions.create({
     customer: family.stripe_customer_id,
-    return_url: `${publicBaseUrl(c.req.url, c.env)}/account`,
+    return_url: `${publicBaseUrl(c.req.url, c.env)}/account/subscription`,
   });
   return c.redirect(portal.url);
 });
