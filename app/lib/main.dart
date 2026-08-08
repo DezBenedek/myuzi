@@ -6,6 +6,7 @@ import 'providers/theme_provider.dart';
 import 'router.dart';
 import 'services/app_notify.dart';
 import 'theme/app_theme.dart';
+import 'widgets/incoming_call_host.dart';
 import 'widgets/offline_banner.dart';
 
 Future<void> main() async {
@@ -39,7 +40,7 @@ class MyUziApp extends ConsumerWidget {
           ),
           child: Stack(
             children: [
-              child ?? const SizedBox.shrink(),
+              IncomingCallHost(child: child ?? const SizedBox.shrink()),
               const OfflineBanner(),
             ],
           ),

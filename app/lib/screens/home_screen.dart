@@ -23,11 +23,9 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _poll;
-  String? _incomingCallId;
   int? _lastUnreadTotal;
   bool _sheetOpen = false;
   bool _tickInFlight = false;
-  bool _incomingAction = false;
   final _seenInviteTokens = <String>{};
 
   @override
@@ -40,7 +38,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void dispose() {
     _poll?.cancel();
-    AppNotify.stopCallRingtone();
     super.dispose();
   }
 
@@ -48,7 +45,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_tickInFlight || !mounted) return;
     _tickInFlight = true;
     try {
-      await Future.wait([_checkIncoming(), _refreshUnread(), _checkInviteInbox()]);
+      await Future.wait([_refreshUnread(), _checkInviteInbox()]);
     } finally {
       _tickInFlight = false;
     }
@@ -147,110 +144,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ref.read(homeNotifierProvider.notifier).applyData(data);
       _lastUnreadTotal = total;
     } catch (_) {}
-  }
-
-  Future<void> _checkIncoming() async {
-    final auth = ref.read(authProvider);
-    if (!auth.isLoggedIn) return;
-    try {
-      final calls = await ref.read(apiProvider).activeCalls();
-      final me = ref.read(authProvider).user?.id;
-      if (!mounted || me == null) return;
-      for (final call in calls) {
-        if (call['status'] == 'ringing' && call['initiated_by'] != me) {
-          if (mounted && _incomingCallId != call['id']) {
-            setState(() => _incomingCallId = call['id'] as String);
-            _showIncoming(call);
-          }
-          return;
-        }
-      }
-      if (_incomingCallId != null && mounted) {
-        await AppNotify.stopCallRingtone();
-        setState(() => _incomingCallId = null);
-      }
-    } catch (_) {}
-  }
-
-  void _showIncoming(Map<String, dynamic> call) {
-    if (_sheetOpen) return;
-    _sheetOpen = true;
-    AppNotify.startCallRingtone();
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(22, 24, 22, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Bejövő hívás', style: Theme.of(ctx).textTheme.headlineMedium),
-              const SizedBox(height: 8),
-              Text(
-                call['call_type'] == 'video' ? 'Videóhívás' : 'Hanghívás',
-                style: Theme.of(ctx).textTheme.bodyLarge,
-              ),
-              const SizedBox(height: 20),
-              BigButton(
-                label: 'Fogadás',
-                icon: Icons.call,
-                onPressed: () async {
-                  if (_incomingAction) return;
-                  _incomingAction = true;
-                  await AppNotify.stopCallRingtone();
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  _sheetOpen = false;
-                  try {
-                    final session =
-                        await ref.read(apiProvider).joinCall(call['id'] as String);
-                    if (!mounted) return;
-                    context.push('/call/${session.id}', extra: {
-                      'livekitUrl': session.livekitUrl,
-                      'token': session.token,
-                      'callType': session.callType,
-                      'title': 'Hívás',
-                    });
-                  } on ApiException catch (e) {
-                    if (mounted) showAppToast(context, e.message, error: true);
-                  } catch (_) {
-                    if (mounted) {
-                      showAppToast(context, 'A hívás nem érhető el', error: true);
-                    }
-                  } finally {
-                    _incomingAction = false;
-                  }
-                },
-              ),
-              const SizedBox(height: 10),
-              BigButton(
-                label: 'Elutasítás',
-                icon: Icons.call_end,
-                outlined: true,
-                danger: true,
-                onPressed: () async {
-                  if (_incomingAction) return;
-                  _incomingAction = true;
-                  await AppNotify.stopCallRingtone();
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  _sheetOpen = false;
-                  try {
-                    await ref.read(apiProvider).endCall(call['id'] as String);
-                  } catch (_) {}
-                  if (mounted) setState(() => _incomingCallId = null);
-                  _incomingAction = false;
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    ).whenComplete(() {
-      _sheetOpen = false;
-      _incomingAction = false;
-      AppNotify.stopCallRingtone();
-    });
   }
 
   Future<void> _togglePin(ConversationSummary c) async {

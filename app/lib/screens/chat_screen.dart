@@ -181,7 +181,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .map((m) => heardIds.contains(m.id) ? m.copyWith(unread: false) : m)
           .toList();
       await LocalCache.saveMessages(widget.conversationId, messages);
-      unawaited(LocalCache.prefetchAudio(api, messages, keep: 3));
+      unawaited(LocalCache.prefetchAudio(
+        api,
+        messages.where((m) => !m.isCall && m.url != null).toList(),
+        keep: 3,
+      ));
 
       final home = ref.read(homeNotifierProvider).asData?.value;
       final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
@@ -366,6 +370,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _play(VoiceMessage msg) async {
+    if (msg.isCall || msg.url == null) return;
     final request = ++_playRequest;
     if (_playingId == msg.id) {
       await _player.stop();
@@ -386,7 +391,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           showAppToast(context, 'Nincs internet', error: true);
           return;
         }
-        final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
+        final bytes = await ref.read(apiProvider).downloadAudio(msg.url!);
         await LocalCache.putAudio(msg.id, bytes);
         file = await LocalCache.audioFile(msg.id);
       }
@@ -567,6 +572,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             callType: type,
           );
       if (!mounted) return;
+      unawaited(_load(silent: true));
       context.push('/call/${session.id}', extra: {
         'livekitUrl': session.livekitUrl,
         'token': session.token,
@@ -578,6 +584,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       showAppToast(context, e.message, error: true);
     } finally {
       _callStarting = false;
+    }
+  }
+
+  String _formatCallDuration(int ms) {
+    final total = (ms / 1000).round().clamp(0, 24 * 60 * 60);
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  String _callEventLabel(VoiceMessage m) {
+    final video = m.callType == 'video';
+    final kind = video ? 'Videóhívás' : 'Hanghívás';
+    switch (m.callStatus) {
+      case 'ringing':
+        return 'Csengő ${video ? 'videó' : 'hang'}hívás…';
+      case 'active':
+        return 'Folyamatban lévő ${video ? 'videó' : 'hang'}hívás…';
+      case 'missed':
+        return 'Nem fogadott ${video ? 'videó' : 'hang'}hívás';
+      case 'ended':
+        return '$kind · ${_formatCallDuration(m.durationMs)}';
+      default:
+        return kind;
+    }
+  }
+
+  IconData _callEventIcon(VoiceMessage m) {
+    switch (m.callStatus) {
+      case 'missed':
+        return Icons.call_missed_outgoing;
+      case 'ended':
+        return Icons.call_end;
+      case 'active':
+        return Icons.phone_in_talk;
+      default:
+        return m.callType == 'video' ? Icons.videocam : Icons.call;
     }
   }
 
@@ -625,6 +668,57 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemBuilder: (context, i) {
                           final m = _messages[i];
                           final mine = m.senderId == me;
+                          if (m.isCall) {
+                            final missed = m.callStatus == 'missed';
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: MediaQuery.sizeOf(context).width * 0.9,
+                                  ),
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: t.colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.7),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            _callEventIcon(m),
+                                            size: 20,
+                                            color: missed
+                                                ? t.colorScheme.error
+                                                : t.colorScheme.primary,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Flexible(
+                                            child: Text(
+                                              '${mine ? 'Te' : m.senderName} · ${_callEventLabel(m)}',
+                                              textAlign: TextAlign.center,
+                                              style: t.textTheme.bodyMedium?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                                color: missed
+                                                    ? t.colorScheme.error
+                                                    : t.colorScheme.onSurface,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
                           final readers = _readersAt(i, me);
                           return Align(
                             alignment:

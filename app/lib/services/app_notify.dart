@@ -95,6 +95,50 @@ class AppNotify {
     );
   }
 
+  static Future<void> showIncomingCall({
+    required String title,
+    required String body,
+  }) async {
+    if (!_ready) await init();
+    await _plugin.show(
+      id: 42,
+      title: title,
+      body: body,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'incoming_calls',
+          'Bejövő hívások',
+          channelDescription: 'Csengő bejövő hívásoknál',
+          importance: Importance.max,
+          priority: Priority.max,
+          category: AndroidNotificationCategory.call,
+          fullScreenIntent: true,
+          playSound: true,
+          ongoing: true,
+          autoCancel: false,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          interruptionLevel: InterruptionLevel.timeSensitive,
+        ),
+        macOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
+    );
+  }
+
+  static Future<void> clearIncomingCall() async {
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(id: 42);
+    } catch (_) {}
+  }
+
   static Future<void> startCallRingtone() async {
     if (_ringing) return;
     if (!_ready) await init();
@@ -111,11 +155,13 @@ class AppNotify {
   }
 
   static Future<void> stopCallRingtone() async {
-    if (!_ringing) return;
-    _ringing = false;
-    try {
-      await _ringtone.stop();
-    } catch (_) {}
+    if (_ringing) {
+      _ringing = false;
+      try {
+        await _ringtone.stop();
+      } catch (_) {}
+    }
+    await clearIncomingCall();
   }
 
   static Future<String> _ensureRingtoneFile() async {

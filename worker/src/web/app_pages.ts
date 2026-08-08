@@ -281,6 +281,16 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
       }
     }
 
+    function callLabel(m) {
+      const video = m.callType === 'video';
+      const kind = video ? 'Videóhívás' : 'Hanghívás';
+      if (m.callStatus === 'ringing') return 'Csengő ' + (video ? 'videó' : 'hang') + 'hívás…';
+      if (m.callStatus === 'active') return 'Folyamatban lévő ' + (video ? 'videó' : 'hang') + 'hívás…';
+      if (m.callStatus === 'missed') return 'Nem fogadott ' + (video ? 'videó' : 'hang') + 'hívás';
+      if (m.callStatus === 'ended') return kind + ' · ' + fmtDur(m.durationMs);
+      return kind;
+    }
+
     async function loadMsgs() {
       if (loadingMsgs) return;
       loadingMsgs = true;
@@ -294,6 +304,20 @@ export function appChatPage(user: UserRow, conversationId: string, title: string
         for (const m of msgs) {
           const div = document.createElement('div');
           const mine = m.senderId === meId;
+          if (m.kind === 'call') {
+            div.className = 'bubble'+(mine?' mine':'');
+            div.style.textAlign = 'center';
+            const label = document.createElement('div');
+            label.style.fontWeight = '700';
+            label.textContent = (mine ? 'Te' : (m.senderName || '')) + ' · ' + callLabel(m);
+            const time = document.createElement('div');
+            time.className = 'time';
+            time.textContent = new Date(m.createdAt).toLocaleString('hu-HU');
+            div.appendChild(label);
+            div.appendChild(time);
+            box.appendChild(div);
+            continue;
+          }
           div.className = 'bubble'+(mine?' mine':'')+(m.unread?' unread':'');
           const who = document.createElement('div');
           who.className = 'who';
@@ -462,9 +486,27 @@ export function appCallPage(
     let micOn = true;
     let camOn = isVideo;
     let ending = false;
+    let talkStartedAt = null;
+    let talkTimer = null;
     const participantTiles = new Map();
     const trackOwners = new Map();
     const grid = document.getElementById('grid');
+    const statusEl = document.getElementById('status');
+
+    function fmtTalk(ms) {
+      const s = Math.max(0, Math.round(ms/1000));
+      return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    }
+
+    function maybeStartTalkTimer() {
+      if (talkStartedAt || !room) return;
+      if (!room.remoteParticipants || room.remoteParticipants.size < 1) return;
+      talkStartedAt = Date.now();
+      talkTimer = setInterval(() => {
+        statusEl.textContent = 'Kapcsolódva · ' + fmtTalk(Date.now() - talkStartedAt);
+      }, 1000);
+      statusEl.textContent = 'Kapcsolódva · 0:00';
+    }
 
     function loadSdk(cb) {
       if (window.LivekitClient) return cb();
@@ -583,10 +625,14 @@ export function appCallPage(
         room.on(Livekit.RoomEvent.LocalTrackPublished, (publication, participant) => {
           if (publication?.track) attachTrack(publication.track, participant || room.localParticipant);
         });
-        room.on(Livekit.RoomEvent.ParticipantConnected, renderGrid);
+        room.on(Livekit.RoomEvent.ParticipantConnected, () => {
+          renderGrid();
+          maybeStartTalkTimer();
+        });
         room.on(Livekit.RoomEvent.ParticipantDisconnected, renderGrid);
         room.on(Livekit.RoomEvent.ActiveSpeakersChanged, setActiveSpeakers);
         room.on(Livekit.RoomEvent.Disconnected, () => {
+          if (talkTimer) clearInterval(talkTimer);
           status.textContent = 'Lecsatlakozva';
           renderGrid();
         });
@@ -599,7 +645,11 @@ export function appCallPage(
           }
         });
         renderGrid();
-        status.textContent = 'Kapcsolódva';
+        if (room.remoteParticipants.size > 0) {
+          maybeStartTalkTimer();
+        } else {
+          status.textContent = 'Cseng…';
+        }
       } catch (e) {
         try { await room?.disconnect(); } catch {}
         room = null;

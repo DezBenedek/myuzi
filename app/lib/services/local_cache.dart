@@ -212,8 +212,9 @@ class LocalCache {
     final newest = messages.length > keep ? messages.sublist(messages.length - keep) : messages;
     for (final m in newest.reversed) {
       try {
+        if (m.isCall || m.url == null || m.url!.isEmpty) continue;
         if (await hasAudio(m.id)) continue;
-        final bytes = await api.downloadAudio(m.url);
+        final bytes = await api.downloadAudio(m.url!);
         await putAudio(m.id, bytes);
       } catch (_) {
         // Best-effort cache.
@@ -308,5 +309,9 @@ class LocalCache {
         'url': m.url,
         'unread': m.unread,
         'waveBars': m.waveBars,
+        'kind': m.kind,
+        'callId': m.callId,
+        'callStatus': m.callStatus,
+        'callType': m.callType,
       };
 }

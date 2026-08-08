@@ -2,14 +2,13 @@ import { Hono } from "hono";
 import type { Env, Variables } from "../types";
 import { id } from "../lib/crypto";
 import {
-  getUserById,
   getUserFamily,
   hasPaidPlan,
   isConversationMember,
   isFamilyMember,
 } from "../lib/db";
 import { createLiveKitToken } from "../lib/livekit";
-import { sendPush } from "../lib/push";
+import { notifyConversationMembers } from "../lib/push";
 import { readLimitedJson } from "../lib/body";
 import { requireAuth } from "../middleware/auth";
 
@@ -27,17 +26,121 @@ type CallRow = {
   initiated_by: string;
   status: "ringing" | "active" | "ended";
   created_at: string;
+  answered_at: string | null;
+  event_message_id: string | null;
+  ended_at?: string | null;
 };
 
-async function expireStaleCalls(db: D1Database): Promise<void> {
+function parseSqlTime(value: string): number {
+  const raw = value.trim();
+  if (!raw) return Date.now();
+  if (raw.includes("T") || raw.endsWith("Z")) {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : Date.now();
+  }
+  const ms = Date.parse(raw.replace(" ", "T") + "Z");
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
+function callDurationMs(answeredAt: string | null | undefined, endedAt?: string): number {
+  if (!answeredAt) return 0;
+  const start = parseSqlTime(answeredAt);
+  const end = endedAt ? parseSqlTime(endedAt) : Date.now();
+  return Math.max(0, Math.min(end - start, 12 * 60 * 60 * 1000));
+}
+
+async function createCallChatMessage(
+  db: D1Database,
+  opts: {
+    conversationId: string;
+    senderId: string;
+    callId: string;
+    callType: "audio" | "video";
+  },
+): Promise<string> {
+  const messageId = id("msg");
+  await db
+    .prepare(
+      `INSERT INTO voice_messages
+         (id, conversation_id, sender_id, r2_key, duration_ms, wave_bars, kind, call_id, call_status, call_type)
+       VALUES (?, ?, ?, '', 0, NULL, 'call', ?, 'ringing', ?)`,
+    )
+    .bind(messageId, opts.conversationId, opts.senderId, opts.callId, opts.callType)
+    .run();
+  await db
+    .prepare(`UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`)
+    .bind(opts.conversationId)
+    .run();
+  return messageId;
+}
+
+async function setCallMessageStatus(
+  db: D1Database,
+  opts: {
+    messageId: string | null | undefined;
+    status: "ringing" | "active" | "missed" | "ended";
+    durationMs?: number;
+  },
+): Promise<void> {
+  if (!opts.messageId) return;
+  await db
+    .prepare(
+      `UPDATE voice_messages
+       SET call_status = ?, duration_ms = ?
+       WHERE id = ? AND kind = 'call'`,
+    )
+    .bind(opts.status, opts.durationMs ?? 0, opts.messageId)
+    .run();
+}
+
+async function finalizeCall(
+  db: D1Database,
+  call: CallRow,
+): Promise<"missed" | "ended"> {
+  const wasAnswered = call.status === "active" || !!call.answered_at;
+  const outcome = wasAnswered ? "ended" : "missed";
+  const durationMs = wasAnswered ? callDurationMs(call.answered_at) : 0;
+  const endedAt = new Date().toISOString();
+
   await db
     .prepare(
       `UPDATE calls
-       SET status = 'ended', ended_at = datetime('now')
+       SET status = 'ended', ended_at = ?
+       WHERE id = ? AND status != 'ended'`,
+    )
+    .bind(endedAt, call.id)
+    .run();
+
+  await setCallMessageStatus(db, {
+    messageId: call.event_message_id,
+    status: outcome,
+    durationMs,
+  });
+
+  if (call.conversation_id) {
+    await db
+      .prepare(`UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`)
+      .bind(call.conversation_id)
+      .run();
+  }
+
+  return outcome;
+}
+
+async function expireStaleCalls(db: D1Database): Promise<void> {
+  const stale = await db
+    .prepare(
+      `SELECT id, family_id, conversation_id, room_name, call_type, initiated_by,
+              status, created_at, answered_at, event_message_id
+       FROM calls
        WHERE status IN ('ringing', 'active')
          AND created_at < datetime('now', '-2 hours')`,
     )
-    .run();
+    .all<CallRow>();
+
+  for (const call of stale.results ?? []) {
+    await finalizeCall(db, call);
+  }
 }
 
 async function tokenForCall(
@@ -49,6 +152,34 @@ async function tokenForCall(
     identity: user.id,
     name: user.name,
     roomName: call.room_name,
+  });
+}
+
+async function notifyIncomingCall(
+  env: Env,
+  opts: {
+    conversationId: string;
+    excludeUserId: string;
+    callId: string;
+    callType: "audio" | "video";
+    roomName: string;
+    fromName: string;
+  },
+): Promise<void> {
+  await notifyConversationMembers(env, {
+    conversationId: opts.conversationId,
+    excludeUserId: opts.excludeUserId,
+    title: "Bejövő hívás",
+    body: `${opts.fromName} hív (${opts.callType === "video" ? "videó" : "hang"})`,
+    kind: "call",
+    data: {
+      type: "incoming_call",
+      callId: opts.callId,
+      callType: opts.callType,
+      roomName: opts.roomName,
+      conversationId: opts.conversationId,
+      fromName: opts.fromName,
+    },
   });
 }
 
@@ -111,7 +242,29 @@ calls.post("/start", async (c) => {
     .bind(family.id, conversationId, me.id)
     .first<CallRow>();
   if (existing) {
+    if (!existing.event_message_id) {
+      const messageId = await createCallChatMessage(c.env.DB, {
+        conversationId,
+        senderId: me.id,
+        callId: existing.id,
+        callType: existing.call_type,
+      });
+      await c.env.DB.prepare(`UPDATE calls SET event_message_id = ? WHERE id = ?`)
+        .bind(messageId, existing.id)
+        .run();
+      existing.event_message_id = messageId;
+    }
     const token = await tokenForCall(c.env, existing, me);
+    c.executionCtx.waitUntil(
+      notifyIncomingCall(c.env, {
+        conversationId,
+        excludeUserId: me.id,
+        callId: existing.id,
+        callType: existing.call_type,
+        roomName: existing.room_name,
+        fromName: me.name,
+      }),
+    );
     return c.json({
       call: {
         id: existing.id,
@@ -126,12 +279,19 @@ calls.post("/start", async (c) => {
 
   const callId = id("call");
   const roomName = `myuzi-${family.id}-${callId}`;
+  const messageId = await createCallChatMessage(c.env.DB, {
+    conversationId,
+    senderId: me.id,
+    callId,
+    callType,
+  });
 
   await c.env.DB.prepare(
-    `INSERT INTO calls (id, family_id, conversation_id, room_name, call_type, initiated_by, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'ringing')`,
+    `INSERT INTO calls
+       (id, family_id, conversation_id, room_name, call_type, initiated_by, status, event_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, 'ringing', ?)`,
   )
-    .bind(callId, family.id, conversationId, roomName, callType, me.id)
+    .bind(callId, family.id, conversationId, roomName, callType, me.id, messageId)
     .run();
 
   const call: CallRow = {
@@ -143,31 +303,21 @@ calls.post("/start", async (c) => {
     initiated_by: me.id,
     status: "ringing",
     created_at: new Date().toISOString(),
+    answered_at: null,
+    event_message_id: messageId,
   };
   const token = await tokenForCall(c.env, call, me);
 
-  // Soft push: store ringing state; clients poll / ring via push tokens
-  const callees = [...participantIds].filter((id) => id !== me.id);
-  for (const uid of callees) {
-    const u = await getUserById(c.env.DB, uid);
-    if (u?.push_token) {
-      c.executionCtx.waitUntil(
-        sendPush(c.env, {
-          token: u.push_token,
-          title: "Bejövő hívás",
-          body: `${me.name} hív (${callType === "video" ? "videó" : "hang"})`,
-          kind: "call",
-          data: {
-            type: "incoming_call",
-            callId,
-            callType,
-            roomName,
-            fromName: me.name,
-          },
-        }),
-      );
-    }
-  }
+  c.executionCtx.waitUntil(
+    notifyIncomingCall(c.env, {
+      conversationId,
+      excludeUserId: me.id,
+      callId,
+      callType,
+      roomName,
+      fromName: me.name,
+    }),
+  );
 
   return c.json({
     call: {
@@ -204,10 +354,27 @@ calls.post("/:id/join", async (c) => {
     return c.json({ error: "Nincs jogosultság" }, 403);
   }
 
-  if (call.status === "ringing") {
-    await c.env.DB.prepare("UPDATE calls SET status = 'active' WHERE id = ?")
-      .bind(callId)
+  if (call.status === "ringing" && call.initiated_by !== c.get("userId")) {
+    const answeredAt = new Date().toISOString();
+    await c.env.DB.prepare(
+      `UPDATE calls
+       SET status = 'active', answered_at = COALESCE(answered_at, ?)
+       WHERE id = ? AND status = 'ringing'`,
+    )
+      .bind(answeredAt, callId)
       .run();
+    await setCallMessageStatus(c.env.DB, {
+      messageId: call.event_message_id,
+      status: "active",
+      durationMs: 0,
+    });
+    if (call.conversation_id) {
+      await c.env.DB.prepare(
+        `UPDATE conversations SET updated_at = datetime('now') WHERE id = ?`,
+      )
+        .bind(call.conversation_id)
+        .run();
+    }
   }
 
   const user = c.get("user");
@@ -221,6 +388,7 @@ calls.post("/:id/join", async (c) => {
       livekitUrl: c.env.LIVEKIT_URL,
       token,
       status: "active",
+      answeredAt: call.answered_at,
     },
   });
 });
@@ -230,9 +398,13 @@ calls.post("/:id/end", async (c) => {
   await expireStaleCalls(c.env.DB);
   const call = await c.env.DB.prepare("SELECT * FROM calls WHERE id = ?")
     .bind(callId)
-    .first<Pick<CallRow, "family_id" | "conversation_id" | "status">>();
+    .first<CallRow>();
 
   if (!call) return c.json({ error: "Nem található" }, 404);
+  if (call.status === "ended") {
+    return c.json({ ok: true, alreadyEnded: true });
+  }
+
   const allowed = call.conversation_id
     ? await isConversationMember(c.env.DB, call.conversation_id, c.get("userId"))
     : await isFamilyMember(c.env.DB, call.family_id, c.get("userId"));
@@ -240,16 +412,12 @@ calls.post("/:id/end", async (c) => {
     return c.json({ error: "Nincs jogosultság" }, 403);
   }
 
-  await c.env.DB.prepare(
-    `UPDATE calls SET status = 'ended', ended_at = datetime('now') WHERE id = ?`,
-  )
-    .bind(callId)
-    .run();
-
-  return c.json({ ok: true });
+  const outcome = await finalizeCall(c.env.DB, call);
+  return c.json({ ok: true, outcome });
 });
 
 calls.get("/active", async (c) => {
+  await expireStaleCalls(c.env.DB);
   const family = await getUserFamily(c.env.DB, c.get("userId"));
   if (!family) return c.json({ calls: [] });
 

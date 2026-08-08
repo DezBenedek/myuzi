@@ -98,6 +98,7 @@ conversations.get("/", async (c) => {
       (SELECT COUNT(*) FROM voice_messages vm
          WHERE vm.conversation_id = c.id
            AND vm.sender_id != ?
+           AND COALESCE(vm.kind, 'voice') = 'voice'
            AND vm.created_at > COALESCE(cm.last_read_at, '1970-01-01T00:00:00.000Z')
       ) AS unread_count
      FROM conversations c

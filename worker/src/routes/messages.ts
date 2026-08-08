@@ -99,9 +99,13 @@ messages.delete("/item/:messageId", async (c) => {
       conversation_id: string;
       sender_id: string;
       r2_key: string;
+      kind: string | null;
     }>();
 
   if (!msg) return c.json({ error: "Nem található" }, 404);
+  if ((msg.kind ?? "voice") === "call") {
+    return c.json({ error: "A hívásüzenet nem törölhető" }, 400);
+  }
   if (msg.sender_id !== c.get("userId")) {
     return c.json({ error: "Csak a saját üzenetedet törölheted" }, 403);
   }
@@ -109,7 +113,9 @@ messages.delete("/item/:messageId", async (c) => {
     return c.json({ error: "Nincs hozzáférés" }, 403);
   }
 
-  await c.env.VOICE.delete(msg.r2_key);
+  if (msg.r2_key) {
+    await c.env.VOICE.delete(msg.r2_key);
+  }
   await c.env.DB.prepare("DELETE FROM voice_messages WHERE id = ?").bind(messageId).run();
   return c.json({ ok: true });
 });
@@ -134,9 +140,13 @@ messages.get("/audio/:messageId", async (c) => {
       id: string;
       conversation_id: string;
       r2_key: string;
+      kind: string | null;
     }>();
 
   if (!msg) return c.json({ error: "Nem található" }, 404);
+  if ((msg.kind ?? "voice") === "call" || !msg.r2_key) {
+    return c.json({ error: "Nincs hangfájl" }, 404);
+  }
   if (!(await isConversationMember(c.env.DB, msg.conversation_id, c.get("userId")))) {
     return c.json({ error: "Nincs hozzáférés" }, 403);
   }
@@ -192,6 +202,10 @@ messages.get("/:conversationId", async (c) => {
       duration_ms: number;
       wave_bars: string | null;
       created_at: string;
+      kind: string | null;
+      call_id: string | null;
+      call_status: string | null;
+      call_type: string | null;
     }>();
 
   const cutoff = lastReadAt ?? "1970-01-01T00:00:00.000Z";
@@ -212,17 +226,24 @@ messages.get("/:conversationId", async (c) => {
     }>();
 
   return c.json({
-    messages: (rows.results ?? []).reverse().map((m) => ({
-      id: m.id,
-      conversationId: m.conversation_id,
-      senderId: m.sender_id,
-      senderName: m.sender_name,
-      durationMs: m.duration_ms,
-      waveBars: parseWaveBars(m.wave_bars),
-      createdAt: m.created_at,
-      unread: m.sender_id !== userId && m.created_at > cutoff,
-      url: `/api/messages/audio/${m.id}`,
-    })),
+    messages: (rows.results ?? []).reverse().map((m) => {
+      const kind = m.kind === "call" ? "call" : "voice";
+      return {
+        id: m.id,
+        conversationId: m.conversation_id,
+        senderId: m.sender_id,
+        senderName: m.sender_name,
+        kind,
+        callId: m.call_id,
+        callStatus: m.call_status,
+        callType: m.call_type === "video" ? "video" : m.call_type === "audio" ? "audio" : null,
+        durationMs: m.duration_ms,
+        waveBars: kind === "voice" ? parseWaveBars(m.wave_bars) : [],
+        createdAt: m.created_at,
+        unread: m.sender_id !== userId && m.created_at > cutoff,
+        url: kind === "voice" ? `/api/messages/audio/${m.id}` : null,
+      };
+    }),
     memberReads: (memberReads.results ?? []).map((m) => ({
       userId: m.id,
       name: m.name,

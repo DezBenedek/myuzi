@@ -65,6 +65,9 @@ class _CallScreenState extends ConsumerState<CallScreen> {
   DateTime? _candidateSince;
   Timer? _speakerEvalTimer;
   Timer? _speakerUiTimer;
+  Timer? _talkTimer;
+  DateTime? _talkStartedAt;
+  Duration _talkElapsed = Duration.zero;
   bool _closing = false;
 
   bool get _isVideo => widget.callType == 'video';
@@ -98,6 +101,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
           }
         })
         ..on<ParticipantConnectedEvent>((_) {
+          _maybeStartTalkTimer();
           if (mounted) setState(() {});
         })
         ..on<ParticipantDisconnectedEvent>((e) {
@@ -153,6 +157,7 @@ class _CallScreenState extends ConsumerState<CallScreen> {
         _focusId = room.localParticipant?.identity;
         _focusSince = DateTime.now();
       });
+      _maybeStartTalkTimer();
     } catch (e) {
       try {
         await _listener?.dispose();
@@ -477,11 +482,34 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     }
   }
 
+  void _maybeStartTalkTimer() {
+    if (_talkStartedAt != null || _closing) return;
+    final remotes = _room?.remoteParticipants.length ?? 0;
+    if (remotes <= 0) return;
+    _talkStartedAt = DateTime.now();
+    _talkElapsed = Duration.zero;
+    _talkTimer?.cancel();
+    _talkTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final started = _talkStartedAt;
+      if (!mounted || started == null) return;
+      setState(() => _talkElapsed = DateTime.now().difference(started));
+    });
+    if (mounted) setState(() {});
+  }
+
+  String _formatTalkElapsed() {
+    final total = _talkElapsed.inSeconds.clamp(0, 24 * 60 * 60);
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   @override
   void dispose() {
     _closing = true;
     _speakerEvalTimer?.cancel();
     _speakerUiTimer?.cancel();
+    _talkTimer?.cancel();
     final listener = _listener;
     final room = _room;
     _listener = null;
@@ -574,7 +602,11 @@ class _CallScreenState extends ConsumerState<CallScreen> {
                     ),
                   ),
                   Text(
-                    '${tiles.length} résztvevő · ${_isVideo ? 'Videó' : 'Hang'}',
+                    _connecting
+                        ? 'Csatlakozás…'
+                        : _talkStartedAt == null
+                            ? 'Cseng… · ${_isVideo ? 'Videó' : 'Hang'}'
+                            : '${_formatTalkElapsed()} · ${tiles.length} résztvevő · ${_isVideo ? 'Videó' : 'Hang'}',
                     style: t.textTheme.bodyMedium
                         ?.copyWith(color: Colors.white70),
                   ),
