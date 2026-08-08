@@ -227,6 +227,18 @@ class VoiceMessage {
       waveBars: bars,
     );
   }
+
+  VoiceMessage copyWith({bool? unread, List<int>? waveBars}) => VoiceMessage(
+        id: id,
+        conversationId: conversationId,
+        senderId: senderId,
+        senderName: senderName,
+        durationMs: durationMs,
+        createdAt: createdAt,
+        url: url,
+        unread: unread ?? this.unread,
+        waveBars: waveBars ?? this.waveBars,
+      );
 }
 
 class CallSession {

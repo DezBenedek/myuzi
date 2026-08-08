@@ -52,7 +52,24 @@ async function getLastReadAt(
   return row?.last_read_at ?? null;
 }
 
-async function markRead(db: D1Database, conversationId: string, userId: string): Promise<void> {
+async function markRead(
+  db: D1Database,
+  conversationId: string,
+  userId: string,
+  at?: string | null,
+): Promise<void> {
+  if (at) {
+    await db
+      .prepare(
+        `UPDATE conversation_members
+         SET last_read_at = ?
+         WHERE conversation_id = ? AND user_id = ?
+           AND (last_read_at IS NULL OR last_read_at < ?)`,
+      )
+      .bind(at, conversationId, userId, at)
+      .run();
+    return;
+  }
   await db
     .prepare(
       `UPDATE conversation_members
@@ -92,7 +109,14 @@ messages.post("/:conversationId/read", async (c) => {
   if (!(await isConversationMember(c.env.DB, conversationId, c.get("userId")))) {
     return c.json({ error: "Nincs hozzáférés" }, 403);
   }
-  await markRead(c.env.DB, conversationId, c.get("userId"));
+  let at: string | null = null;
+  try {
+    const body = await c.req.json<{ at?: string }>();
+    if (typeof body.at === "string" && body.at.length > 0) at = body.at;
+  } catch {
+    // empty body ok
+  }
+  await markRead(c.env.DB, conversationId, c.get("userId"), at);
   return c.json({ ok: true });
 });
 
@@ -159,8 +183,7 @@ messages.get("/:conversationId", async (c) => {
 
   const cutoff = lastReadAt ?? "1970-01-01T00:00:00.000Z";
 
-  await markRead(c.env.DB, conversationId, userId);
-
+  // Don't mark read on list — unread stays until the listener plays the message.
   const memberReads = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.avatar_key, cm.last_read_at
      FROM conversation_members cm

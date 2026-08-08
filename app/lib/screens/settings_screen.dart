@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/models.dart';
 import '../providers/connectivity_provider.dart';
 import '../providers/providers.dart';
+import '../providers/theme_provider.dart';
 import '../services/api_client.dart';
 import '../services/local_cache.dart';
 import '../services/toast.dart';
@@ -166,86 +167,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _inviteDrawer() async {
-    final emailCtrl = TextEditingController();
-    String? inviteUrl;
-    var busy = false;
-
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) {
-        final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('Meghívó', style: Theme.of(ctx).textTheme.titleLarge),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Opcionális email — ha megadod, elküldjük a meghívót.',
-                    style: Theme.of(ctx).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    autofocus: true,
-                    decoration: const InputDecoration(hintText: 'Email@pelda.hu (opcionális)'),
-                  ),
-                  if (inviteUrl != null) ...[
-                    const SizedBox(height: 12),
-                    SelectableText(
-                      inviteUrl!,
-                      style: Theme.of(ctx).textTheme.bodyMedium,
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  BigButton(
-                    label: busy ? 'Készítés…' : 'Meghívó készítése',
-                    icon: Icons.link,
-                    onPressed: busy
-                        ? null
-                        : () async {
-                            if (!ref.read(connectivityProvider)) {
-                              showAppToast(ctx, 'Nincs internet', error: true);
-                              return;
-                            }
-                            setLocal(() => busy = true);
-                            try {
-                              final url = await ref.read(apiProvider).createInvite(
-                                    email: emailCtrl.text.trim().isEmpty
-                                        ? null
-                                        : emailCtrl.text.trim(),
-                                  );
-                              await Clipboard.setData(ClipboardData(text: url));
-                              setLocal(() {
-                                inviteUrl = url;
-                                busy = false;
-                              });
-                              if (ctx.mounted) {
-                                showAppToast(ctx, 'Meghívó kész (vágólapra másolva)');
-                              }
-                            } on ApiException catch (e) {
-                              setLocal(() => busy = false);
-                              if (ctx.mounted) {
-                                showAppToast(ctx, e.message, error: true);
-                              }
-                            }
-                          },
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (ctx) => _InviteSheet(
+        onCreate: (email) async {
+          final url = await ref.read(apiProvider).createInvite(
+                email: email.isEmpty ? null : email,
+              );
+          await Clipboard.setData(ClipboardData(text: url));
+          return url;
+        },
+      ),
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => emailCtrl.dispose());
   }
 
   Future<void> _confirmLogout() async {
@@ -305,41 +240,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       return;
     }
 
-    final ctrl = TextEditingController(text: fam.name);
-    final ok = await showModalBottomSheet<bool>(
+    final name = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) {
-        final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Család neve', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 14),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(hintText: 'Család neve'),
-              ),
-              const SizedBox(height: 16),
-              BigButton(
-                label: 'Mentés',
-                icon: Icons.check,
-                onPressed: () => Navigator.pop(ctx, true),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (ctx) => _FamilyNameSheet(initialName: fam.name),
     );
-    final name = ctrl.text.trim();
-    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.dispose());
-    if (ok != true || name.length < 2) return;
+    if (name == null || name.length < 2) return;
 
     try {
       await ref.read(apiProvider).renameFamily(familyId: fam.id, name: name);
@@ -425,6 +332,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final family = ref.watch(familyProvider);
     final t = Theme.of(context);
     final vision = auth.user?.visionAssist ?? false;
+    final dark = ref.watch(themeModeProvider) == ThemeMode.dark;
     final fam = family.asData?.value.family;
     final members = family.asData?.value.members ?? const <FamilyMember>[];
     final me = auth.user?.id;
@@ -524,6 +432,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 if (isOwner)
                   Icon(Icons.edit_outlined, color: t.colorScheme.primary),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SoftCard(
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Sötét téma', style: t.textTheme.titleLarge),
+              value: dark,
+              onChanged: (v) => ref.read(themeModeProvider.notifier).setDark(v),
             ),
           ),
           const SizedBox(height: 12),
@@ -730,7 +647,149 @@ class _ProfileEditSheetState extends State<_ProfileEditSheet> {
           BigButton(
             label: _busy ? 'Mentés…' : 'Mentés',
             icon: Icons.check,
-            onPressed: _busy ? null : _save,
+            onPressed: _busy
+                ? null
+                : () {
+                    FocusScope.of(context).unfocus();
+                    _save();
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InviteSheet extends StatefulWidget {
+  const _InviteSheet({required this.onCreate});
+
+  final Future<String> Function(String email) onCreate;
+
+  @override
+  State<_InviteSheet> createState() => _InviteSheetState();
+}
+
+class _InviteSheetState extends State<_InviteSheet> {
+  final _email = TextEditingController();
+  String? _inviteUrl;
+  var _busy = false;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _busy = true);
+    try {
+      final url = await widget.onCreate(_email.text.trim());
+      if (!mounted) return;
+      setState(() {
+        _inviteUrl = url;
+        _busy = false;
+      });
+      showAppToast(context, 'Meghívó kész (vágólapra másolva)');
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showAppToast(context, e.message, error: true);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showAppToast(context, 'Meghívó sikertelen', error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    final t = Theme.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Meghívó', style: t.textTheme.titleLarge),
+          const SizedBox(height: 8),
+          Text(
+            'Opcionális email — ha megadod, elküldjük a meghívót.',
+            style: t.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'email@pelda.hu (opcionális)'),
+          ),
+          if (_inviteUrl != null) ...[
+            const SizedBox(height: 12),
+            SelectableText(_inviteUrl!, style: t.textTheme.bodyMedium),
+          ],
+          const SizedBox(height: 16),
+          BigButton(
+            label: _busy ? 'Készítés…' : 'Meghívó készítése',
+            icon: Icons.link,
+            onPressed: _busy ? null : _submit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FamilyNameSheet extends StatefulWidget {
+  const _FamilyNameSheet({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_FamilyNameSheet> createState() => _FamilyNameSheetState();
+}
+
+class _FamilyNameSheetState extends State<_FamilyNameSheet> {
+  late final TextEditingController _name;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Család neve', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _name,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(hintText: 'Család neve'),
+          ),
+          const SizedBox(height: 16),
+          BigButton(
+            label: 'Mentés',
+            icon: Icons.check,
+            onPressed: () {
+              FocusScope.of(context).unfocus();
+              Navigator.pop(context, _name.text.trim());
+            },
           ),
         ],
       ),

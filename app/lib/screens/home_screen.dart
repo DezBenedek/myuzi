@@ -407,42 +407,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _messageByEmailDrawer() async {
-    final emailCtrl = TextEditingController();
-    final ok = await showModalBottomSheet<bool>(
+    final email = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) {
-        final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Email / kapcsolat', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 14),
-              TextField(
-                controller: emailCtrl,
-                keyboardType: TextInputType.emailAddress,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: 'valaki@email.hu'),
-                onSubmitted: (_) => Navigator.pop(ctx, true),
-              ),
-              const SizedBox(height: 16),
-              BigButton(
-                label: 'Tovább',
-                icon: Icons.send,
-                onPressed: () => Navigator.pop(ctx, true),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (ctx) => const _EmailContactSheet(),
     );
-    final email = emailCtrl.text.trim();
-    WidgetsBinding.instance.addPostFrameCallback((_) => emailCtrl.dispose());
-    if (ok != true || email.isEmpty) return;
+    if (email == null || email.isEmpty) return;
     if (!ref.read(connectivityProvider)) {
       showAppToast(context, 'Nincs internet', error: true);
       return;
@@ -480,131 +451,210 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted || home == null) return;
     final me = ref.read(authProvider).user!.id;
     final people = home.people.where((p) => p.id != me).toList();
-    final selected = <String>{};
-    final nameCtrl = TextEditingController();
-    final searchCtrl = TextEditingController();
 
-    final ok = await showModalBottomSheet<bool>(
+    final draft = await showModalBottomSheet<_GroupDraft>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            final q = searchCtrl.text.trim().toLowerCase();
-            final filtered = q.isEmpty
-                ? people
-                : people
-                    .where(
-                      (p) =>
-                          p.name.toLowerCase().contains(q) ||
-                          p.email.toLowerCase().contains(q),
-                    )
-                    .toList();
-            final height = MediaQuery.sizeOf(ctx).height * 0.88;
-            final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
-
-            return SizedBox(
-              height: height,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 16 + bottom),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Új csoport', style: Theme.of(ctx).textTheme.titleLarge),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: nameCtrl,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(hintText: 'Csoport neve'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: searchCtrl,
-                      decoration: const InputDecoration(
-                        hintText: 'Keresés név vagy email alapján',
-                        prefixIcon: Icon(Icons.search),
-                      ),
-                      onChanged: (_) => setLocal(() {}),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      selected.isEmpty
-                          ? 'Válassz tagokat'
-                          : '${selected.length} tag kiválasztva',
-                      style: Theme.of(ctx).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 6),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? Center(
-                              child: Text(
-                                'Nincs találat',
-                                style: Theme.of(ctx).textTheme.bodyLarge,
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: filtered.length,
-                              itemBuilder: (_, i) {
-                                final p = filtered[i];
-                                final on = selected.contains(p.id);
-                                return CheckboxListTile(
-                                  value: on,
-                                  contentPadding: EdgeInsets.zero,
-                                  secondary: UserAvatar(
-                                    name: p.name,
-                                    avatarUrl: p.avatarUrl,
-                                    userId: p.id,
-                                    radius: 20,
-                                  ),
-                                  title: Text(p.name),
-                                  subtitle: Text(p.email),
-                                  onChanged: (v) {
-                                    setLocal(() {
-                                      if (v == true) {
-                                        selected.add(p.id);
-                                      } else {
-                                        selected.remove(p.id);
-                                      }
-                                    });
-                                  },
-                                );
-                              },
-                            ),
-                    ),
-                    const SizedBox(height: 8),
-                    BigButton(
-                      label: 'Kész',
-                      icon: Icons.check,
-                      onPressed: () => Navigator.pop(ctx, true),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (ctx) => _CreateGroupSheet(people: people),
     );
+    if (draft == null || draft.name.length < 2) return;
 
-    final groupName = nameCtrl.text.trim();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      nameCtrl.dispose();
-      searchCtrl.dispose();
-    });
-
-    if (ok == true && groupName.length >= 2) {
-      try {
-        final id = await ref.read(apiProvider).createGroup(
-              name: groupName,
-              memberIds: selected.toList(),
-            );
-        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
-        if (!mounted) return;
-        context.push('/chat/$id');
-      } on ApiException catch (e) {
-        if (mounted) showAppToast(context, e.message, error: true);
-      }
+    try {
+      final id = await ref.read(apiProvider).createGroup(
+            name: draft.name,
+            memberIds: draft.memberIds,
+          );
+      unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
+      if (!mounted) return;
+      context.push('/chat/$id');
+    } on ApiException catch (e) {
+      if (mounted) showAppToast(context, e.message, error: true);
     }
+  }
+}
+
+class _GroupDraft {
+  const _GroupDraft({required this.name, required this.memberIds});
+  final String name;
+  final List<String> memberIds;
+}
+
+class _EmailContactSheet extends StatefulWidget {
+  const _EmailContactSheet();
+
+  @override
+  State<_EmailContactSheet> createState() => _EmailContactSheetState();
+}
+
+class _EmailContactSheetState extends State<_EmailContactSheet> {
+  final _email = TextEditingController();
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    FocusScope.of(context).unfocus();
+    Navigator.pop(context, _email.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Email / kapcsolat', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: 'valaki@email.hu'),
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 16),
+          BigButton(
+            label: 'Tovább',
+            icon: Icons.send,
+            onPressed: _submit,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CreateGroupSheet extends StatefulWidget {
+  const _CreateGroupSheet({required this.people});
+
+  final List<FamilyMember> people;
+
+  @override
+  State<_CreateGroupSheet> createState() => _CreateGroupSheetState();
+}
+
+class _CreateGroupSheetState extends State<_CreateGroupSheet> {
+  final _name = TextEditingController();
+  final _search = TextEditingController();
+  final _selected = <String>{};
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    FocusScope.of(context).unfocus();
+    Navigator.pop(
+      context,
+      _GroupDraft(
+        name: _name.text.trim(),
+        memberIds: _selected.toList(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _search.text.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? widget.people
+        : widget.people
+            .where(
+              (p) =>
+                  p.name.toLowerCase().contains(q) ||
+                  p.email.toLowerCase().contains(q),
+            )
+            .toList();
+    final height = MediaQuery.sizeOf(context).height * 0.88;
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+
+    return SizedBox(
+      height: height,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 4, 20, 16 + bottom),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Új csoport', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(hintText: 'Csoport neve'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _search,
+              decoration: const InputDecoration(
+                hintText: 'Keresés név vagy email alapján',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _selected.isEmpty
+                  ? 'Válassz tagokat'
+                  : '${_selected.length} tag kiválasztva',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: filtered.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Nincs találat',
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (_, i) {
+                        final p = filtered[i];
+                        final on = _selected.contains(p.id);
+                        return CheckboxListTile(
+                          value: on,
+                          contentPadding: EdgeInsets.zero,
+                          secondary: UserAvatar(
+                            name: p.name,
+                            avatarUrl: p.avatarUrl,
+                            userId: p.id,
+                            radius: 20,
+                          ),
+                          title: Text(p.name),
+                          subtitle: Text(p.email),
+                          onChanged: (v) {
+                            setState(() {
+                              if (v == true) {
+                                _selected.add(p.id);
+                              } else {
+                                _selected.remove(p.id);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 8),
+            BigButton(
+              label: 'Kész',
+              icon: Icons.check,
+              onPressed: _submit,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

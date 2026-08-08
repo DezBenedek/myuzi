@@ -94,21 +94,48 @@ class _UserAvatarState extends ConsumerState<UserAvatar> {
     }
   }
 
+  /// Theme-aware placeholder colors (works in light + dark).
+  (Color bg, Color fg) _placeholderColors(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final seed = widget.name.hashCode;
+    // A few muted brand-tinted hues so avatars differ but stay readable.
+    const lightBgs = [
+      Color(0xFFD9F2E6),
+      Color(0xFFD6EAE3),
+      Color(0xFFE2F0E8),
+      Color(0xFFCFE8DC),
+    ];
+    const darkBgs = [
+      Color(0xFF2A3D34),
+      Color(0xFF243830),
+      Color(0xFF314840),
+      Color(0xFF1F332A),
+    ];
+    final bgs = dark ? darkBgs : lightBgs;
+    var bg = bgs[seed.abs() % bgs.length];
+    if (widget.highlight) {
+      bg = dark ? const Color(0xFF3D6B55) : const Color(0xFFB8E6D0);
+    }
+    final fg = dark ? const Color(0xFFE8F5EE) : const Color(0xFF12261C);
+    return (bg, fg);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
     final initial =
         widget.name.isNotEmpty ? widget.name.characters.first.toUpperCase() : '?';
-    final bg = widget.highlight ? const Color(0xFFB8E6D0) : const Color(0xFFD9F2E6);
+    final (bg, fg) = _placeholderColors(context);
 
     return CircleAvatar(
       radius: widget.radius,
       backgroundColor: bg,
+      foregroundColor: fg,
       backgroundImage: _bytes != null ? MemoryImage(_bytes!) : null,
       child: _bytes == null
           ? Text(
               initial,
-              style: t.textTheme.titleMedium?.copyWith(
+              style: TextStyle(
+                color: fg,
                 fontWeight: FontWeight.w700,
                 fontSize: widget.radius * 0.85,
               ),

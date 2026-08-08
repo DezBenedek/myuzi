@@ -58,14 +58,15 @@ class SoftCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context);
     final vision = MediaQuery.textScalerOf(context).scale(1) > 1.1;
     return Material(
-      color: Colors.white,
+      color: t.cardColor,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: BorderSide(
-          color: vision ? Colors.black : const Color(0xFFD7E4DC),
+          color: vision ? t.colorScheme.onSurface : t.dividerColor,
           width: vision ? 2 : 1,
         ),
       ),

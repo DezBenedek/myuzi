@@ -47,6 +47,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<void>? _completeSub;
   Timer? _progressTick;
+  StreamSubscription<Amplitude>? _ampSub;
+  final _waveCollector = WaveformCollector();
   bool _sending = false;
 
   int get _maxRecordMs {
@@ -98,6 +100,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
     _progressTick?.cancel();
+    _ampSub?.cancel();
     _posSub?.cancel();
     _completeSub?.cancel();
     _scroll.dispose();
@@ -146,15 +149,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     try {
       final api = ref.read(apiProvider);
       final page = await api.listMessages(widget.conversationId, limit: 50);
-      await LocalCache.saveMessages(widget.conversationId, page.messages);
-      unawaited(LocalCache.prefetchAudio(api, page.messages, keep: 8));
+      // Keep locally cleared "heard" flags if refresh races with mark-read.
+      final heardIds = {
+        for (final m in _messages)
+          if (!m.unread) m.id,
+      };
+      final messages = page.messages
+          .map((m) => heardIds.contains(m.id) ? m.copyWith(unread: false) : m)
+          .toList();
+      await LocalCache.saveMessages(widget.conversationId, messages);
+      unawaited(LocalCache.prefetchAudio(api, messages, keep: 8));
 
       final home = ref.read(homeNotifierProvider).asData?.value;
       final conv = home?.conversations.where((c) => c.id == widget.conversationId).firstOrNull;
 
       if (mounted) {
         setState(() {
-          _messages = page.messages;
+          _messages = messages;
           _memberReads = page.memberReads;
           if (conv != null) _title = conv.name;
           _loading = false;
@@ -201,10 +212,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     final dir = await getTemporaryDirectory();
     final file = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    _waveCollector.reset();
+    await _ampSub?.cancel();
     await _recorder.start(
       const RecordConfig(encoder: AudioEncoder.aacLc),
       path: file,
     );
+    _ampSub = _recorder
+        .onAmplitudeChanged(const Duration(milliseconds: 80))
+        .listen((amp) {
+      _waveCollector.addDb(amp.current);
+      if (mounted) setState(() {});
+    });
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
     setState(() {
@@ -226,6 +245,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (!_recording || _sending) return;
     _recordTick?.cancel();
     _maxRecordTimer?.cancel();
+    await _ampSub?.cancel();
+    _ampSub = null;
+    final waveBars = _waveCollector.toBars();
     final path = await _recorder.stop();
     final started = _recordStarted;
     final maxMs = _maxRecordMs;
@@ -241,7 +263,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     var duration = DateTime.now().difference(started).inMilliseconds;
     if (duration > maxMs) duration = maxMs;
     final bytes = await File(path).readAsBytes();
-    final waveBars = VoiceWaveBubble.generateBars();
     try {
       final msg = await ref.read(apiProvider).uploadVoice(
             conversationId: widget.conversationId,
@@ -305,6 +326,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final bytes = await ref.read(apiProvider).downloadAudio(msg.url);
         await LocalCache.putAudio(msg.id, bytes);
         file = await LocalCache.audioFile(msg.id);
+      }
+
+      final meId = ref.read(authProvider).user!.id;
+      if (msg.senderId != meId && msg.unread) {
+        // Clear yellow for this message and older ones.
+        setState(() {
+          _messages = _messages.map((m) {
+            if (m.senderId == meId) return m;
+            if (m.createdAt.compareTo(msg.createdAt) <= 0) {
+              return m.copyWith(unread: false);
+            }
+            return m;
+          }).toList();
+        });
+        unawaited(LocalCache.saveMessages(widget.conversationId, _messages));
+        unawaited(
+          ref.read(apiProvider).markConversationRead(
+                widget.conversationId,
+                at: msg.createdAt,
+              ),
+        );
+        unawaited(ref.read(homeNotifierProvider.notifier).refresh(silent: true));
       }
 
       final fallbackMs = msg.durationMs > 200 ? msg.durationMs : 1000;
@@ -513,17 +556,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 5),
                               child: ConstrainedBox(
                                 constraints: BoxConstraints(
-                                  maxWidth: MediaQuery.sizeOf(context).width * 0.78,
-                                  minWidth: 180,
+                                  maxWidth: MediaQuery.sizeOf(context).width * 0.82,
+                                  minWidth: 160,
                                 ),
                                 child: Column(
                                   crossAxisAlignment: mine
                                       ? CrossAxisAlignment.end
                                       : CrossAxisAlignment.start,
                                   children: [
+                                    Padding(
+                                      padding: EdgeInsets.only(
+                                        left: mine ? 0 : 4,
+                                        right: mine ? 4 : 0,
+                                        bottom: 4,
+                                      ),
+                                      child: Text(
+                                        mine ? 'Te' : m.senderName,
+                                        style: t.textTheme.labelMedium?.copyWith(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: t.colorScheme.onSurface
+                                              .withValues(alpha: 0.55),
+                                        ),
+                                      ),
+                                    ),
                                     VoiceWaveBubble(
                                       mine: mine,
-                                      senderLabel: mine ? 'Te' : m.senderName,
                                       durationMs: m.durationMs,
                                       messageId: m.id,
                                       waveBars: m.waveBars,
@@ -580,12 +638,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 children: [
                   if (_recording)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Text(
-                        'Felvétel · ${_fmt(_recordElapsed)}',
-                        style: t.textTheme.titleLarge?.copyWith(
-                          color: t.colorScheme.error,
-                        ),
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Felvétel · ${_fmt(_recordElapsed)}',
+                            style: t.textTheme.titleLarge?.copyWith(
+                              color: t.colorScheme.error,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          LiveScrollWave(
+                            samples: _waveCollector.liveScrollUnits(),
+                            height: 44,
+                          ),
+                        ],
                       ),
                     ),
                   BigButton(

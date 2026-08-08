@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers/providers.dart';
+import 'providers/theme_provider.dart';
 import 'router.dart';
 import 'services/app_notify.dart';
 import 'theme/app_theme.dart';
@@ -21,11 +22,14 @@ class MyUziApp extends ConsumerWidget {
     final auth = ref.watch(authProvider);
     final router = ref.watch(routerProvider);
     final vision = auth.user?.visionAssist ?? false;
+    final themeMode = ref.watch(themeModeProvider);
 
     return MaterialApp.router(
       title: 'MyÜzi',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(visionAssist: vision),
+      darkTheme: AppTheme.dark(visionAssist: vision),
+      themeMode: themeMode,
       routerConfig: router,
       builder: (context, child) {
         final media = MediaQuery.of(context);

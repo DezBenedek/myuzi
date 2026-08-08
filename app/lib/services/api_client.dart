@@ -418,6 +418,18 @@ class ApiClient {
     );
   }
 
+  Future<void> markConversationRead(String conversationId, {String? at}) async {
+    final res = await _send(
+      (uri) => _client.post(
+        uri,
+        headers: _headers(),
+        body: jsonEncode({if (at != null) 'at': at}),
+      ),
+      path: '/api/messages/$conversationId/read',
+    );
+    await _json(res);
+  }
+
   Future<void> deleteMessage(String messageId) async {
     final res = await _send(
       (uri) => _client.delete(uri, headers: _headers()),
